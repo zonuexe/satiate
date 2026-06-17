@@ -9,7 +9,9 @@ use Composer\IO\NullIO;
 use Composer\Json\JsonFile;
 use Composer\MetadataMinifier\MetadataMinifier;
 use Composer\Package\CompletePackageInterface;
+use Composer\Repository\ComposerRepository;
 use Composer\Repository\RepositorySet;
+use Psl\Type;
 use Satiate\Audit\Auditor;
 use Satiate\Config\SatisConfig;
 
@@ -127,6 +129,8 @@ final class BuildRunner
                 );
 
                 foreach ($finder as $file) {
+                    assert($file instanceof \SplFileInfo);
+
                     if ($file->isFile() && $file->getExtension() === 'php') {
                         $results = $auditor->auditFile($packageName, $version, $file->getPathname());
 
@@ -355,6 +359,10 @@ final class BuildRunner
         $names = [];
 
         foreach ($rm->getRepositories() as $repo) {
+            if (! $repo instanceof ComposerRepository) {
+                continue;
+            }
+
             try {
                 foreach ($repo->getPackageNames() as $name) {
                     $names[] = $name;
@@ -385,18 +393,14 @@ final class BuildRunner
     }
 
     /**
-     * @return list<array<string, mixed>>
+     * @return list<array{name: string, version: string, ...<string, mixed>}>
      */
     private function serializePackages(string $outputDir): array
     {
         $result = [];
 
         foreach ($this->resolvedPackages as $package) {
-            $data = $this->packageToArray($package, $outputDir);
-
-            if ($data !== null) {
-                $result[] = $data;
-            }
+            $result[] = $this->packageToArray($package, $outputDir);
         }
 
         return $result;
@@ -447,9 +451,9 @@ final class BuildRunner
     }
 
     /**
-     * @return array<string, mixed>|null
+     * @return array{name: string, version: string, ...<string, mixed>}
      */
-    private function packageToArray(CompletePackageInterface $package, string $outputDir): ?array
+    private function packageToArray(CompletePackageInterface $package, string $outputDir): array
     {
         $requires = [];
 
@@ -561,7 +565,7 @@ final class BuildRunner
     }
 
     /**
-     * @param list<array<string, mixed>> $packages
+     * @param list<array{name: string, version: string, ...<string, mixed>}> $packages
      */
     private function generatePackagesJson(string $outputDir, array $packages): void
     {
@@ -646,6 +650,11 @@ final class BuildRunner
             'packages' => $grouped,
         ];
         $encoded = json_encode($includeData, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+
+        if ($encoded === false) {
+            throw new \RuntimeException('Failed to encode include file data.');
+        }
+
         $hash = sha1($encoded);
 
         $includePath = \sprintf('include/all$%s.json', $hash);
@@ -655,23 +664,32 @@ final class BuildRunner
     }
 
     /**
-     * @param list<array<string, mixed>> $packages
+     * @param list<array{name: string, version: string, ...<string, mixed>}> $packages
      */
     private function generateWebUi(string $outputDir, array $packages): void
     {
         $repoName = \htmlspecialchars($this->config->name);
         $homepage = \htmlspecialchars($this->config->homepage);
 
+        $stringType = Type\string();
+        $licenseType = Type\union(Type\string(), Type\vec(Type\string()));
+        $distType = Type\shape([
+            'url' => Type\string(),
+        ], true);
+
         $rows = '';
 
         foreach ($packages as $pkg) {
-            $name = $pkg['name'] ?? '';
-            $version = $pkg['version'] ?? '';
-            $description = $pkg['description'] ?? '';
-            $type = $pkg['type'] ?? '';
-            $license = \is_array($pkg['license'] ?? null) ? \implode(', ', $pkg['license']) : ($pkg['license'] ?? '');
+            $name = $pkg['name'];
+            $version = $pkg['version'];
+            $description = $stringType->coerce($pkg['description'] ?? '');
+            $type = $stringType->coerce($pkg['type'] ?? '');
 
-            $distUrl = $pkg['dist']['url'] ?? '';
+            $rawLicense = $licenseType->coerce($pkg['license'] ?? '');
+            $license = \is_array($rawLicense) ? \implode(', ', $rawLicense) : $rawLicense;
+
+            $dist = isset($pkg['dist']) ? $distType->coerce($pkg['dist']) : null;
+            $distUrl = $dist['url'] ?? '';
             $distHtml = $distUrl !== '' ? \sprintf('<a href="%s">download</a>', \htmlspecialchars($distUrl)) : '';
 
             $rows .= \sprintf(

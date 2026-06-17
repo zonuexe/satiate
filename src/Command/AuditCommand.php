@@ -130,10 +130,11 @@ final class AuditCommand extends Command
             new \RecursiveDirectoryIterator($path, \RecursiveDirectoryIterator::SKIP_DOTS),
         );
 
-        /** @var list<string> $files */
         $files = [];
 
         foreach ($iterator as $file) {
+            assert($file instanceof \SplFileInfo);
+
             if ($file->isFile() && $file->getExtension() === 'php') {
                 $files[] = $file->getPathname();
             }

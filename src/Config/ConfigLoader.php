@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Satiate\Config;
 
+use Psl\Type;
+
 final class ConfigLoader
 {
     public static function load(string $path): SatisConfig
@@ -37,12 +39,18 @@ final class ConfigLoader
         $name = isset($decoded['name']) && is_string($decoded['name']) ? $decoded['name'] : '';
         $homepage = isset($decoded['homepage']) && is_string($decoded['homepage']) ? $decoded['homepage'] : '';
 
+        $repositoryType = Type\shape([
+            'type' => Type\string(),
+            'url' => Type\string(),
+            'name' => Type\optional(Type\string()),
+        ]);
+
         $repositories = [];
 
         if (isset($decoded['repositories']) && is_array($decoded['repositories'])) {
             foreach ($decoded['repositories'] as $repo) {
                 if (is_array($repo) && isset($repo['type'], $repo['url']) && is_string($repo['type']) && is_string($repo['url'])) {
-                    $repositories[] = $repo;
+                    $repositories[] = $repositoryType->coerce($repo);
                 }
             }
         }
@@ -63,26 +71,21 @@ final class ConfigLoader
 
         $maxVersionsPerPackage = isset($decoded['max-versions-per-package']) && is_int($decoded['max-versions-per-package']) ? $decoded['max-versions-per-package'] : 0;
 
+        $archiveType = Type\shape([
+            'directory' => Type\string(),
+            'format' => Type\string(),
+            'prefix-url' => Type\optional(Type\string()),
+            'skip-dev' => Type\optional(Type\bool()),
+        ]);
+
         $archive = null;
 
-        if (isset($decoded['archive']) && is_array($decoded['archive'])) {
-            $archive = [];
-
-            if (isset($decoded['archive']['directory']) && is_string($decoded['archive']['directory'])) {
-                $archive['directory'] = $decoded['archive']['directory'];
-            }
-
-            if (isset($decoded['archive']['format']) && is_string($decoded['archive']['format'])) {
-                $archive['format'] = $decoded['archive']['format'];
-            }
-
-            if (isset($decoded['archive']['prefix-url']) && is_string($decoded['archive']['prefix-url'])) {
-                $archive['prefix-url'] = $decoded['archive']['prefix-url'];
-            }
-
-            if (isset($decoded['archive']['skip-dev']) && is_bool($decoded['archive']['skip-dev'])) {
-                $archive['skip-dev'] = $decoded['archive']['skip-dev'];
-            }
+        if (
+            isset($decoded['archive'])
+            && is_array($decoded['archive'])
+            && isset($decoded['archive']['directory'], $decoded['archive']['format'])
+        ) {
+            $archive = $archiveType->coerce($decoded['archive']);
         }
 
         return new SatisConfig(

@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Satiate\Lock;
 
+use Psl\Json;
+use Psl\Type;
+
 final class LockAnalyzer
 {
     /**
@@ -23,19 +26,20 @@ final class LockAnalyzer
             throw new \RuntimeException(\sprintf('Failed to read lock file: %s', $lockPath));
         }
 
-        $data = json_decode($contents, true);
-
-        if (! is_array($data) || ! isset($data['packages']) || ! is_array($data['packages'])) {
-            throw new \RuntimeException(\sprintf('Invalid lock file format: %s', $lockPath));
+        try {
+            $data = Json\typed($contents, Type\shape([
+                'packages' => Type\vec(Type\shape([
+                    'name' => Type\string(),
+                    'version' => Type\string(),
+                ], true)),
+            ], true));
+        } catch (Json\Exception\DecodeException $e) {
+            throw new \RuntimeException(\sprintf('Invalid lock file format: %s', $lockPath), 0, $e);
         }
 
         $constraints = [];
 
         foreach ($data['packages'] as $package) {
-            if (! isset($package['name'], $package['version'])) {
-                continue;
-            }
-
             $name = $package['name'];
             $version = ltrim($package['version'], 'v');
             $isRisky = $this->assessReversionRisk($name, $projectDir);
@@ -64,7 +68,7 @@ final class LockAnalyzer
             escapeshellarg($projectDir),
         ));
 
-        if ($blameOutput === null || $blameOutput === '') {
+        if ($blameOutput === null || $blameOutput === false || $blameOutput === '') {
             return false;
         }
 

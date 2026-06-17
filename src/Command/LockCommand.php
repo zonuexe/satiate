@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Satiate\Command;
 
+use Psl\Type;
 use Satiate\Lock\LockAnalyzer;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
@@ -28,8 +29,8 @@ final class LockCommand extends Command
 
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
-        $lockPath = $input->getOption('lock');
-        $configPath = $input->getOption('config');
+        $lockPath = Type\string()->coerce($input->getOption('lock'));
+        $configPath = Type\string()->coerce($input->getOption('config'));
         $dryRun = $input->getOption('dry-run') === true;
 
         if (! is_file($lockPath)) {
@@ -38,8 +39,16 @@ final class LockCommand extends Command
             return self::FAILURE;
         }
 
+        $realLockPath = realpath($lockPath);
+
+        if ($realLockPath === false) {
+            $output->writeln(\sprintf('<error>Lock file not found: %s</error>', $lockPath));
+
+            return self::FAILURE;
+        }
+
         $analyzer = new LockAnalyzer();
-        $projectDir = \dirname(realpath($lockPath));
+        $projectDir = \dirname($realLockPath);
         $constraints = $analyzer->analyze($lockPath, $projectDir);
 
         if ($constraints === []) {
