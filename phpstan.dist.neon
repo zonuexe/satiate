@@ -10,4 +10,3 @@ parameters:
 		- .vendor-bin/phpunit/vendor/autoload.php
 includes:
 	- .vendor-bin/phpstan/vendor/phpstan/phpstan/conf/bleedingEdge.neon
-	- .vendor-bin/phpstan/vendor/phpstan/phpstan-phpunit/extension.neon
