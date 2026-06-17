@@ -27,6 +27,8 @@ final class BuildRunner
         private readonly bool $runAudit,
     ) {}
 
+    public int $lastAuditFindings = 0;
+
     public function run(): int
     {
         $outputDir = $this->outputDir;
@@ -147,6 +149,8 @@ final class BuildRunner
 
             file_put_contents($auditedPath, json_encode($audited, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
         }
+
+        $this->lastAuditFindings = $totalFindings;
     }
 
     private function rmdir(string $path): void
@@ -250,9 +254,37 @@ final class BuildRunner
         }
 
         foreach ($pool->getPackages() as $package) {
-            if ($package instanceof CompletePackageInterface && $package->getType() !== 'metapackage') {
-                $this->resolvedPackages[] = $package;
+            if (! $package instanceof CompletePackageInterface || $package->getType() === 'metapackage') {
+                continue;
             }
+
+            if (! $this->config->requireAll && $this->config->require !== []) {
+                $packageName = $package->getPrettyName();
+
+                if (isset($this->config->require[$packageName])) {
+                    $constraintStr = $this->config->require[$packageName];
+
+                    if (! $this->versionMatchesConstraint($package, $constraintStr)) {
+                        continue;
+                    }
+                }
+            }
+
+            $this->resolvedPackages[] = $package;
+        }
+    }
+
+    private function versionMatchesConstraint(CompletePackageInterface $package, string $constraintStr): bool
+    {
+        try {
+            $versionParser = new \Composer\Semver\VersionParser();
+
+            $requireConstraint = $versionParser->parseConstraints($constraintStr);
+            $packageConstraint = $versionParser->parseConstraints($package->getVersion());
+
+            return $requireConstraint->matches($packageConstraint);
+        } catch (\UnexpectedValueException) {
+            return true;
         }
     }
 
@@ -352,7 +384,10 @@ final class BuildRunner
 
     private function downloadDistArchives(string $outputDir): void
     {
-        $distDir = $outputDir . '/dist';
+        $archiveConfig = $this->config->archive;
+        $distDirName = ($archiveConfig['directory'] ?? 'dist');
+        $archiveFormat = ($archiveConfig['format'] ?? 'zip');
+        $distDir = $outputDir . '/' . $distDirName;
 
         if (! is_dir($distDir)) {
             if (! mkdir($distDir, 0755, true) && ! is_dir($distDir)) {
@@ -376,7 +411,7 @@ final class BuildRunner
                 '%s-%s.%s',
                 str_replace('/', '-', $packageName),
                 $package->getPrettyVersion(),
-                'zip',
+                $archiveFormat,
             );
             $expectedPath = $distDir . '/' . $expectedFilename;
 
@@ -384,7 +419,7 @@ final class BuildRunner
                 continue;
             }
 
-            $createdPath = $archiveManager->archive($package, 'zip', $distDir);
+            $createdPath = $archiveManager->archive($package, $archiveFormat, $distDir);
 
             if ($createdPath !== $expectedPath && is_file($createdPath)) {
                 rename($createdPath, $expectedPath);

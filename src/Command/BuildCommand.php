@@ -33,13 +33,13 @@ final class BuildCommand extends Command
         $configPath = $input->getOption('config');
         $outputDir = $input->getOption('output-dir');
 
-        if (!\is_string($configPath)) {
+        if (! \is_string($configPath)) {
             $output->writeln('<error>Invalid config path.</error>');
 
             return self::FAILURE;
         }
 
-        if (!\is_string($outputDir)) {
+        if (! \is_string($outputDir)) {
             $output->writeln('<error>Invalid output directory.</error>');
 
             return self::FAILURE;
@@ -75,6 +75,10 @@ final class BuildCommand extends Command
             $output->writeln(\sprintf('<error>Build failed: %s</error>', $e->getMessage()));
 
             return self::FAILURE;
+        }
+
+        if ($runner->lastAuditFindings > 0) {
+            $output->writeln(\sprintf('<comment>Audit: %d suspicious pattern(s) found.</comment>', $runner->lastAuditFindings));
         }
 
         if ($result === 0) {

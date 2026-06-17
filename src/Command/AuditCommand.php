@@ -30,7 +30,7 @@ final class AuditCommand extends Command
     {
         $path = $input->getOption('path');
 
-        if (!\is_string($path) || $path === '') {
+        if (! \is_string($path) || $path === '') {
             $output->writeln('<error>--path is required for standalone audit</error>');
 
             return self::FAILURE;
