@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.5'
+          tools: composer:v2
+
+      - run: composer install --no-interaction
+
+      - run: composer bin phpstan install --no-interaction
+      - run: composer bin easycs install --no-interaction
+      - run: composer bin phpunit install --no-interaction
+
+      - run: composer phpstan analyse src/ tests/
+      - run: composer ecs check src/ tests/ bin/
+      - run: composer phpunit
