@@ -61,5 +61,20 @@ final class SatisConfigTest extends TestCase
         self::assertTrue($config->requireDependencies);
         self::assertFalse($config->requireDevDependencies);
         self::assertNull($config->archive);
+        self::assertSame(0, $config->maxVersionsPerPackage);
+    }
+
+    public function testCreateWithVersionPruning(): void
+    {
+        $config = new SatisConfig(
+            name: 'Pruned',
+            homepage: 'https://pruned.example.com',
+            require: [
+                'org/pkg' => '*',
+            ],
+            maxVersionsPerPackage: 5,
+        );
+
+        self::assertSame(5, $config->maxVersionsPerPackage);
     }
 }
