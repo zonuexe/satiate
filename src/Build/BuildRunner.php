@@ -216,7 +216,7 @@ final class BuildRunner
                     }
                 }
 
-                if ($this->config->requireDevDependencies) {
+                if ($this->includeDev || $this->config->requireDevDependencies) {
                     foreach ($pkg->getDevRequires() as $link) {
                         $depName = $link->getTarget();
 
