@@ -70,13 +70,14 @@ final class LockAnalyzer
 
         $lines = explode("\n", $blameOutput);
         $commitsTouching = [];
+        $currentHash = null;
 
         foreach ($lines as $line) {
-            if (str_contains($line, $packageName)) {
-                $commitHash = substr($line, 0, 40);
-
-                if (ctype_xdigit($commitHash) && strlen($commitHash) === 40) {
-                    $commitsTouching[$commitHash] = true;
+            if (preg_match('/^([0-9a-f]{40})\s/', $line, $matches)) {
+                $currentHash = $matches[1];
+            } elseif (str_starts_with($line, "\t") && $currentHash !== null) {
+                if (str_contains($line, $packageName)) {
+                    $commitsTouching[$currentHash] = true;
                 }
             }
         }
