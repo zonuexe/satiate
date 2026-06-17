@@ -336,11 +336,22 @@ final class BuildRunner
 
         $this->generateProviderFiles($outputDir, $grouped);
 
+        $includeHash = $this->generateIncludeFiles($outputDir, $grouped);
+
         $data = [
             'packages' => $grouped,
             'metadata-url' => '/p/%package%.json',
             'available-packages' => array_keys($grouped),
         ];
+
+        if ($includeHash !== null) {
+            $includePath = \sprintf('include/all$%s.json', $includeHash);
+            $data['includes'] = [
+                $includePath => [
+                    'sha1' => $includeHash,
+                ],
+            ];
+        }
 
         $jsonFile = new JsonFile($outputDir . '/packages.json');
         $jsonFile->write($data);
@@ -372,6 +383,36 @@ final class BuildRunner
             $providerFile = new JsonFile($providerDir . '/' . $packagePath . '.json');
             $providerFile->write($providerData);
         }
+    }
+
+    /**
+     * @param array<string, array<string, array<string, mixed>>> $grouped
+     * @return non-empty-string|null
+     */
+    private function generateIncludeFiles(string $outputDir, array $grouped): ?string
+    {
+        $includeDir = $outputDir . '/include';
+
+        if (! is_dir($includeDir)) {
+            if (! mkdir($includeDir, 0755, true) && ! is_dir($includeDir)) {
+                throw new \RuntimeException(\sprintf('Failed to create include directory: %s', $includeDir));
+            }
+        }
+
+        if ($grouped === []) {
+            return null;
+        }
+
+        $includeData = [
+            'packages' => $grouped,
+        ];
+        $encoded = json_encode($includeData, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        $hash = sha1($encoded);
+
+        $includePath = \sprintf('include/all$%s.json', $hash);
+        file_put_contents($outputDir . '/' . $includePath, $encoded);
+
+        return $hash;
     }
 
     /**
