@@ -187,7 +187,12 @@ final class BuildRunner
             $repositorySet->addRepository($repository);
         }
 
-        $pool = $repositorySet->createPoolWithAllPackages();
+        if ($this->config->requireAll) {
+            $pool = $repositorySet->createPoolWithAllPackages();
+        } else {
+            $requiredPackages = array_keys($this->config->require);
+            $pool = $repositorySet->createPoolForPackages($requiredPackages);
+        }
 
         foreach ($pool->getPackages() as $package) {
             if ($package instanceof CompletePackageInterface && $package->getType() !== 'metapackage') {
