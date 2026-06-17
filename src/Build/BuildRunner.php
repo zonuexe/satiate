@@ -188,7 +188,12 @@ final class BuildRunner
         }
 
         if ($this->config->requireAll) {
-            $pool = $repositorySet->createPoolWithAllPackages();
+            try {
+                $pool = $repositorySet->createPoolWithAllPackages();
+            } catch (\LogicException $e) {
+                $allNames = $this->collectAllPackageNames($rm);
+                $pool = $repositorySet->createPoolForPackages($allNames);
+            }
         } else {
             $initialNames = array_keys($this->config->require);
             $allNames = $initialNames;
@@ -235,6 +240,26 @@ final class BuildRunner
                 $this->resolvedPackages[] = $package;
             }
         }
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function collectAllPackageNames(\Composer\Repository\RepositoryManager $rm): array
+    {
+        $names = [];
+
+        foreach ($rm->getRepositories() as $repo) {
+            try {
+                foreach ($repo->getPackageNames() as $name) {
+                    $names[] = $name;
+                }
+            } catch (\Exception) {
+                continue;
+            }
+        }
+
+        return array_values(array_unique($names));
     }
 
     /**
