@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Satiate\Command;
 
+use Satiate\Build\BuildRunner;
 use Satiate\Config\ConfigLoader;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
@@ -29,9 +30,7 @@ final class BuildCommand extends Command
 
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
-        /** @var string $configPath */
         $configPath = $input->getOption('config');
-        /** @var string $outputDir */
         $outputDir = $input->getOption('output-dir');
 
         try {
@@ -42,16 +41,34 @@ final class BuildCommand extends Command
             return self::FAILURE;
         }
 
-        $output->writeln(\sprintf('Building repository: <info>%s</info>', $config->name));
-        $output->writeln(\sprintf('Output directory: <info>%s</info>', $outputDir));
-        $output->writeln(\sprintf('Packages required: <info>%d</info>', \count($config->require)));
-
         $includeDev = $input->getOption('include-dev') === true;
         $runAudit = $input->getOption('no-audit') !== true;
 
+        $output->writeln(\sprintf('Building repository: <info>%s</info>', $config->name));
+        $output->writeln(\sprintf('Output directory: <info>%s</info>', $outputDir));
+        $output->writeln(\sprintf('Packages required: <info>%d</info>', \count($config->require)));
         $output->writeln(\sprintf('Include dev: <info>%s</info>', $includeDev ? 'yes' : 'no'));
         $output->writeln(\sprintf('Audit: <info>%s</info>', $runAudit ? 'enabled' : 'disabled'));
 
-        return self::SUCCESS;
+        $runner = new BuildRunner(
+            config: $config,
+            outputDir: $outputDir,
+            includeDev: $includeDev,
+            runAudit: $runAudit,
+        );
+
+        try {
+            $result = $runner->run();
+        } catch (\RuntimeException $e) {
+            $output->writeln(\sprintf('<error>Build failed: %s</error>', $e->getMessage()));
+
+            return self::FAILURE;
+        }
+
+        if ($result === 0) {
+            $output->writeln('<info>Build completed successfully.</info>');
+        }
+
+        return $result;
     }
 }

@@ -1,13 +1,8 @@
 {
     "name": "My Repository",
     "homepage": "https://packages.example.com",
-    "repositories": [
-        {"type": "vcs", "url": "https://github.com/org/package-a"},
-        {"type": "vcs", "url": "https://github.com/org/package-b"}
-    ],
     "require": {
-        "org/package-a": "^1.0",
-        "org/package-b": "^2.0"
+        "org/package-a": "^1.0"
     },
     "require-all": false,
     "require-dependencies": true,

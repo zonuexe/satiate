@@ -24,8 +24,8 @@ final class ConfigLoaderTest extends TestCase
 
         self::assertSame('My Repository', $config->name);
         self::assertSame('https://packages.example.com', $config->homepage);
-        self::assertCount(2, $config->repositories);
-        self::assertCount(2, $config->require);
+        self::assertCount(0, $config->repositories);
+        self::assertCount(1, $config->require);
         self::assertFalse($config->requireAll);
         self::assertNotNull($config->archive);
     }

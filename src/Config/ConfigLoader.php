@@ -47,8 +47,6 @@ final class ConfigLoader
             }
         }
 
-        /** @var array<int, array{type: string, url: string, name?: string}> $repositories */
-
         $require = [];
 
         if (isset($decoded['require']) && is_array($decoded['require'])) {
@@ -85,7 +83,6 @@ final class ConfigLoader
             }
         }
 
-        /** @var array{directory: string, format: string, prefix-url?: string, skip-dev?: bool}|null $archive */
         return new SatisConfig(
             name: $name,
             homepage: $homepage,
