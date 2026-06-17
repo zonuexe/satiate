@@ -10,6 +10,7 @@ use Composer\Json\JsonFile;
 use Composer\MetadataMinifier\MetadataMinifier;
 use Composer\Package\CompletePackageInterface;
 use Composer\Repository\RepositorySet;
+use Satiate\Audit\Auditor;
 use Satiate\Config\SatisConfig;
 
 final class BuildRunner
@@ -45,10 +46,87 @@ final class BuildRunner
         $this->generatePackagesJson($outputDir, $serialized);
 
         if ($this->runAudit) {
-            // Audit step — not yet implemented
+            $this->auditStep($outputDir);
         }
 
         return 0;
+    }
+
+    private function auditStep(string $outputDir): void
+    {
+        $cacheDir = $outputDir . '/.satiate-cache';
+
+        if (! is_dir($cacheDir)) {
+            if (! mkdir($cacheDir, 0755, true) && ! is_dir($cacheDir)) {
+                throw new \RuntimeException(\sprintf('Failed to create cache directory: %s', $cacheDir));
+            }
+        }
+
+        $auditor = new Auditor();
+        $totalFindings = 0;
+
+        foreach ($this->resolvedPackages as $package) {
+            $packageName = $package->getPrettyName();
+            $version = $package->getPrettyVersion();
+
+            $distDir = $outputDir . '/dist';
+            $archiveFilename = \sprintf(
+                '%s-%s.%s',
+                str_replace('/', '-', $packageName),
+                $version,
+                'zip',
+            );
+            $archivePath = $distDir . '/' . $archiveFilename;
+
+            if (! is_file($archivePath)) {
+                continue;
+            }
+
+            $tmpDir = $cacheDir . '/extract_' . bin2hex(random_bytes(4));
+
+            if (! mkdir($tmpDir, 0755, true) && ! is_dir($tmpDir)) {
+                continue;
+            }
+
+            $zip = new \ZipArchive();
+
+            if ($zip->open($archivePath) === true) {
+                $zip->extractTo($tmpDir);
+                $zip->close();
+
+                $finder = new \RecursiveIteratorIterator(
+                    new \RecursiveDirectoryIterator($tmpDir, \RecursiveDirectoryIterator::SKIP_DOTS),
+                );
+
+                foreach ($finder as $file) {
+                    if ($file->isFile() && $file->getExtension() === 'php') {
+                        $results = $auditor->auditFile($packageName, $version, $file->getPathname());
+
+                        $totalFindings += \count($results);
+                    }
+                }
+
+                $this->rmdir($tmpDir);
+            }
+        }
+    }
+
+    private function rmdir(string $path): void
+    {
+        $iterator = new \RecursiveIteratorIterator(
+            new \RecursiveDirectoryIterator($path, \RecursiveDirectoryIterator::SKIP_DOTS),
+            \RecursiveIteratorIterator::CHILD_FIRST,
+        );
+
+        foreach ($iterator as $item) {
+            if ($item->isDir()) {
+                rmdir($item->getPathname());
+            } else {
+                unlink($item->getPathname());
+            }
+        }
+
+        rmdir($path);
     }
 
     private function resolvePackages(): void

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Satiate;
 
+use Satiate\Command\AuditCommand;
 use Satiate\Command\BuildCommand;
 use Symfony\Component\Console\Application as SymfonyApplication;
 
@@ -18,5 +19,6 @@ final class Application extends SymfonyApplication
         parent::__construct(self::NAME, self::VERSION);
 
         $this->addCommand(new BuildCommand());
+        $this->addCommand(new AuditCommand());
     }
 }
