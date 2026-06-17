@@ -7,6 +7,7 @@ namespace Satiate\Build;
 use Composer\Factory;
 use Composer\IO\NullIO;
 use Composer\Json\JsonFile;
+use Composer\MetadataMinifier\MetadataMinifier;
 use Composer\Repository\RepositorySet;
 use Satiate\Config\SatisConfig;
 
@@ -154,6 +155,8 @@ final class BuildRunner
             $grouped[$name][$version] = $package;
         }
 
+        $this->generateProviderFiles($outputDir, $grouped);
+
         $data = [
             'packages' => $grouped,
             'metadata-url' => '/p/%package%.json',
@@ -162,5 +165,33 @@ final class BuildRunner
 
         $jsonFile = new JsonFile($outputDir . '/packages.json');
         $jsonFile->write($data);
+    }
+
+    /**
+     * @param array<string, array<string, array<string, mixed>>> $grouped
+     */
+    private function generateProviderFiles(string $outputDir, array $grouped): void
+    {
+        $providerDir = $outputDir . '/p';
+
+        if (! is_dir($providerDir)) {
+            if (! mkdir($providerDir, 0755, true) && ! is_dir($providerDir)) {
+                throw new \RuntimeException(\sprintf('Failed to create provider directory: %s', $providerDir));
+            }
+        }
+
+        foreach ($grouped as $packageName => $versions) {
+            $minified = MetadataMinifier::minify($versions);
+
+            $providerData = [
+                'packages' => [
+                    $packageName => $minified,
+                ],
+            ];
+
+            $packagePath = str_replace('/', '$', $packageName);
+            $providerFile = new JsonFile($providerDir . '/' . $packagePath . '.json');
+            $providerFile->write($providerData);
+        }
     }
 }
