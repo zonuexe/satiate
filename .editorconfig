@@ -1,0 +1,34 @@
+# EditorConfig is awesome: https://editorconfig.org/
+
+# top-most EditorConfig file
+root = true
+
+# Unix-style newlines with a newline ending every file
+[*]
+end_of_line = lf
+insert_final_newline = true
+charset = utf-8
+trim_trailing_whitespace = true
+
+# PHP - https://www.php.net/
+[*.{php,phpt,stub}]
+indent_style = space
+indent_size = 4
+ij_php_comma_after_last_argument = true
+ij_php_comma_after_last_closure_use_var = true
+ij_php_comma_after_last_match_arm = true
+ij_php_comma_after_last_parameter = true
+ij_php_else_if_style = combine
+ij_php_space_before_short_closure_left_parenthesis = true
+
+[phpstan-baseline.php]
+indent_style = tab
+indent_size = 4
+
+# NEON - https://ne-on.org/
+[{*.neon,*.neon.dist}]
+indent_style = tab
+indent_size = 4
+
+[*.md]
+trim_trailing_whitespace = false
