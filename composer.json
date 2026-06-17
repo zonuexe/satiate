@@ -2,7 +2,8 @@
     "name": "zonuexe/satiate",
     "license": "AGPL-3.0-or-later",
     "require": {
-        "php": ">=8.5"
+        "php": ">=8.5",
+        "symfony/console": "^8.1"
     },
     "require-dev": {
         "bamarni/composer-bin-plugin": "*",
@@ -12,6 +13,12 @@
         "sort-packages": true,
         "allow-plugins": {
             "bamarni/composer-bin-plugin": true
+        }
+    },
+    "extra": {
+        "bamarni-bin": {
+            "bin-links": false,
+            "forward-command": true
         }
     }
 }
