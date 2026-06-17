@@ -3,6 +3,7 @@
     "license": "AGPL-3.0-or-later",
     "require": {
         "php": ">=8.5",
+        "composer/composer": "^2.10",
         "symfony/console": "^8.1"
     },
     "require-dev": {
