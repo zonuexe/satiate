@@ -20,5 +20,6 @@ readonly class SatisConfig
         public bool $requireDependencies = true,
         public bool $requireDevDependencies = false,
         public ?array $archive = null,
+        public int $maxVersionsPerPackage = 0,
     ) {}
 }

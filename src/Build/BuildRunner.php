@@ -39,6 +39,8 @@ final class BuildRunner
 
         $this->resolvePackages();
 
+        $this->applyVersionPruning();
+
         $this->downloadDistArchives($outputDir);
 
         $serialized = $this->serializePackages($outputDir);
@@ -248,6 +250,45 @@ final class BuildRunner
                 $this->resolvedPackages[] = $package;
             }
         }
+    }
+
+    private function applyVersionPruning(): void
+    {
+        $maxVersions = $this->config->maxVersionsPerPackage;
+
+        if ($maxVersions <= 0) {
+            return;
+        }
+
+        $grouped = [];
+
+        foreach ($this->resolvedPackages as $package) {
+            $name = $package->getPrettyName();
+            $grouped[$name][] = $package;
+        }
+
+        $pruned = [];
+
+        foreach ($grouped as $name => $versions) {
+            if (\count($versions) <= $maxVersions) {
+                foreach ($versions as $pkg) {
+                    $pruned[] = $pkg;
+                }
+
+                continue;
+            }
+
+            $sorted = $versions;
+            usort($sorted, function (CompletePackageInterface $a, CompletePackageInterface $b): int {
+                return version_compare($b->getVersion(), $a->getVersion());
+            });
+
+            for ($i = 0; $i < $maxVersions; $i++) {
+                $pruned[] = $sorted[$i];
+            }
+        }
+
+        $this->resolvedPackages = $pruned;
     }
 
     /**

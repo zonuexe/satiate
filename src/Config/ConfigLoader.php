@@ -61,6 +61,8 @@ final class ConfigLoader
         $requireDependencies = isset($decoded['require-dependencies']) && is_bool($decoded['require-dependencies']) ? $decoded['require-dependencies'] : true;
         $requireDevDependencies = isset($decoded['require-dev-dependencies']) && is_bool($decoded['require-dev-dependencies']) ? $decoded['require-dev-dependencies'] : false;
 
+        $maxVersionsPerPackage = isset($decoded['max-versions-per-package']) && is_int($decoded['max-versions-per-package']) ? $decoded['max-versions-per-package'] : 0;
+
         $archive = null;
 
         if (isset($decoded['archive']) && is_array($decoded['archive'])) {
@@ -92,6 +94,7 @@ final class ConfigLoader
             requireDependencies: $requireDependencies,
             requireDevDependencies: $requireDevDependencies,
             archive: $archive,
+            maxVersionsPerPackage: $maxVersionsPerPackage,
         );
     }
 }
