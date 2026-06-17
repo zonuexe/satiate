@@ -71,6 +71,10 @@ final class LockCommandTest extends TestCase
         );
 
         foreach ($files as $file) {
+            if (! $file instanceof \SplFileInfo) {
+                continue;
+            }
+
             $file->isDir() ? rmdir($file->getPathname()) : unlink($file->getPathname());
         }
 
