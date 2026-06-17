@@ -33,6 +33,18 @@ final class BuildCommand extends Command
         $configPath = $input->getOption('config');
         $outputDir = $input->getOption('output-dir');
 
+        if (!\is_string($configPath)) {
+            $output->writeln('<error>Invalid config path.</error>');
+
+            return self::FAILURE;
+        }
+
+        if (!\is_string($outputDir)) {
+            $output->writeln('<error>Invalid output directory.</error>');
+
+            return self::FAILURE;
+        }
+
         try {
             $config = ConfigLoader::load($configPath);
         } catch (\RuntimeException $e) {
