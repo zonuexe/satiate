@@ -210,6 +210,8 @@ final class BuildRunner
 
             $pool = $repositorySet->createPoolForPackages($allNames);
 
+            /** @var array<string, list<string>> $depConstraints */
+            $depConstraints = [];
             $seen = [];
 
             foreach ($pool->getPackages() as $pkg) {
@@ -229,6 +231,8 @@ final class BuildRunner
                             continue;
                         }
 
+                        $depConstraints[$depName][] = $link->getPrettyConstraint();
+
                         if (! in_array($depName, $allNames, true)) {
                             $allNames[] = $depName;
                         }
@@ -242,6 +246,8 @@ final class BuildRunner
                         if ($this->isPlatformPackage($depName)) {
                             continue;
                         }
+
+                        $depConstraints[$depName][] = $link->getPrettyConstraint();
 
                         if (! in_array($depName, $allNames, true)) {
                             $allNames[] = $depName;
@@ -258,13 +264,27 @@ final class BuildRunner
                 continue;
             }
 
-            if (! $this->config->requireAll && $this->config->require !== []) {
-                $packageName = $package->getPrettyName();
+            $packageName = $package->getPrettyName();
 
+            if (! $this->config->requireAll && $this->config->require !== []) {
                 if (isset($this->config->require[$packageName])) {
                     $constraintStr = $this->config->require[$packageName];
 
                     if (! $this->versionMatchesConstraint($package, $constraintStr)) {
+                        continue;
+                    }
+                } elseif (isset($depConstraints[$packageName])) {
+                    $matchesAny = false;
+
+                    foreach ($depConstraints[$packageName] as $constraintStr) {
+                        if ($this->versionMatchesConstraint($package, $constraintStr)) {
+                            $matchesAny = true;
+
+                            break;
+                        }
+                    }
+
+                    if (! $matchesAny) {
                         continue;
                     }
                 }

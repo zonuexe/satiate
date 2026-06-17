@@ -9,7 +9,8 @@
         "symfony/console": "^8.1"
     },
     "require-dev": {
-        "bamarni/composer-bin-plugin": "*"
+        "bamarni/composer-bin-plugin": "*",
+        "spatie/phpunit-snapshot-assertions": "^5.4"
     },
     "autoload": {
         "psr-4": {
