@@ -11,6 +11,11 @@
         "bamarni/composer-bin-plugin": "*",
         "phpstan/phpstan": "^2.2"
     },
+    "autoload": {
+        "psr-4": {
+            "Satiate\\": "src/"
+        }
+    },
     "config": {
         "sort-packages": true,
         "allow-plugins": {
