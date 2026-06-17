@@ -6,6 +6,7 @@ namespace Satiate;
 
 use Satiate\Command\AuditCommand;
 use Satiate\Command\BuildCommand;
+use Satiate\Command\LockCommand;
 use Symfony\Component\Console\Application as SymfonyApplication;
 
 final class Application extends SymfonyApplication
@@ -20,5 +21,6 @@ final class Application extends SymfonyApplication
 
         $this->addCommand(new BuildCommand());
         $this->addCommand(new AuditCommand());
+        $this->addCommand(new LockCommand());
     }
 }
