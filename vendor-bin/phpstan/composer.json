@@ -1,5 +1,10 @@
 {
+    "name": "zonuexe/satiate-phpstan",
+    "description": "PHPStan for Satiate (vendor-bin)",
     "require-dev": {
         "phpstan/phpstan": "^2.2"
+    },
+    "scripts": {
+        "phpstan": "phpstan"
     }
 }

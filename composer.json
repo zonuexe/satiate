@@ -8,8 +8,7 @@
         "symfony/console": "^8.1"
     },
     "require-dev": {
-        "bamarni/composer-bin-plugin": "*",
-        "phpstan/phpstan": "^2.2"
+        "bamarni/composer-bin-plugin": "*"
     },
     "autoload": {
         "psr-4": {
@@ -21,6 +20,10 @@
         "allow-plugins": {
             "bamarni/composer-bin-plugin": true
         }
+    },
+    "scripts": {
+        "phpstan": "bin/phpstan",
+        "ecs": "bin/ecs"
     },
     "extra": {
         "bamarni-bin": {

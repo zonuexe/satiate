@@ -1,0 +1,2 @@
+#!/bin/sh
+exec php vendor-bin/phpstan/vendor/phpstan/phpstan/phpstan "$@"

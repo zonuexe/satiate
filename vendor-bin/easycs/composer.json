@@ -1,5 +1,8 @@
 {
     "require-dev": {
         "symplify/easy-coding-standard": "^13.2"
+    },
+    "scripts": {
+        "ecs": "ecs"
     }
 }
