@@ -1,0 +1,7 @@
+{
+    "name": "Minimal Repo",
+    "homepage": "https://minimal.example.com",
+    "require": {
+        "org/package": "*"
+    }
+}

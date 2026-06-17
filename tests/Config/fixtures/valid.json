@@ -1,0 +1,21 @@
+{
+    "name": "My Repository",
+    "homepage": "https://packages.example.com",
+    "repositories": [
+        {"type": "vcs", "url": "https://github.com/org/package-a"},
+        {"type": "vcs", "url": "https://github.com/org/package-b"}
+    ],
+    "require": {
+        "org/package-a": "^1.0",
+        "org/package-b": "^2.0"
+    },
+    "require-all": false,
+    "require-dependencies": true,
+    "require-dev-dependencies": false,
+    "archive": {
+        "directory": "dist",
+        "format": "zip",
+        "prefix-url": "https://packages.example.com",
+        "skip-dev": true
+    }
+}
