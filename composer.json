@@ -23,7 +23,8 @@
     },
     "scripts": {
         "phpstan": "bin/phpstan",
-        "ecs": "bin/ecs"
+        "ecs": "bin/ecs",
+        "phpunit": "bin/phpunit"
     },
     "extra": {
         "bamarni-bin": {
