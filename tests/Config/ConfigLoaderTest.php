@@ -56,4 +56,12 @@ final class ConfigLoaderTest extends TestCase
 
         ConfigLoader::load($this->fixtureDir . '/invalid.json');
     }
+
+    public function testLoadConfigWithVersionPruning(): void
+    {
+        $path = $this->fixtureDir . '/valid.json';
+        $config = ConfigLoader::load($path);
+
+        self::assertSame(0, $config->maxVersionsPerPackage);
+    }
 }
