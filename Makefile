@@ -1,4 +1,4 @@
-.PHONY: all install test lint cs cs-fix clean build
+.PHONY: all install test lint cs cs-fix dogfood clean build
 
 all: build
 
@@ -20,7 +20,10 @@ cs:
 cs-fix:
 	.vendor-bin/easycs/vendor/symplify/easy-coding-standard/bin/ecs check src/ tests/ bin/ --fix
 
-build: lint cs test
+dogfood:
+	./bin/dogfood-test
+
+build: lint cs test dogfood
 
 clean:
 	rm -rf output/

@@ -27,3 +27,4 @@ jobs:
       - run: composer phpstan analyse src/ tests/
       - run: composer ecs check src/ tests/ bin/
       - run: composer phpunit
+      - run: ./bin/dogfood-test
