@@ -102,7 +102,7 @@ final class AuditCommand extends Command
         }
 
         if (\is_string($cachePath) && $cachePath !== '' && $newlyAudited !== []) {
-            if (!is_dir($cachePath)) {
+            if (! is_dir($cachePath)) {
                 mkdir($cachePath, 0755, true);
             }
 

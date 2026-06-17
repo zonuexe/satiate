@@ -97,12 +97,12 @@ final class BuildRunner
                 continue;
             }
 
-            $distDir = $outputDir . '/dist';
+            $distDir = $outputDir . '/' . $this->archiveDirName();
             $archiveFilename = \sprintf(
                 '%s-%s.%s',
                 str_replace('/', '-', $packageName),
                 $version,
-                'zip',
+                $this->archiveFormatName(),
             );
             $archivePath = $distDir . '/' . $archiveFilename;
 
@@ -463,14 +463,14 @@ final class BuildRunner
                 '%s-%s.%s',
                 str_replace('/', '-', $package->getPrettyName()),
                 $package->getPrettyVersion(),
-                'zip',
+                $this->archiveFormatName(),
             );
 
             $dist = [
-                'type' => 'zip',
+                'type' => $this->archiveFormatName(),
                 'url' => $this->archiveUrlForPackage($outputDir, $archiveFilename),
                 'reference' => $package->getDistReference(),
-                'shasum' => $this->computeSha256($outputDir . '/dist/' . $archiveFilename),
+                'shasum' => $this->computeSha256($outputDir . '/' . $this->archiveDirName() . '/' . $archiveFilename),
             ];
         }
 
@@ -500,19 +500,33 @@ final class BuildRunner
 
     private function archiveUrlForPackage(string $outputDir, string $archiveFilename): string
     {
+        $archiveDir = $this->archiveDirName();
+
         if ($this->config->archive !== null && isset($this->config->archive['prefix-url'])) {
             return \sprintf(
-                '%s/dist/%s',
+                '%s/%s/%s',
                 rtrim($this->config->archive['prefix-url'], '/'),
+                $archiveDir,
                 $archiveFilename,
             );
         }
 
         return \sprintf(
-            '%s/dist/%s',
+            '%s/%s/%s',
             rtrim($this->config->homepage, '/'),
+            $archiveDir,
             $archiveFilename,
         );
+    }
+
+    private function archiveDirName(): string
+    {
+        return ($this->config->archive ?? [])['directory'] ?? 'dist';
+    }
+
+    private function archiveFormatName(): string
+    {
+        return ($this->config->archive ?? [])['format'] ?? 'zip';
     }
 
     private function computeSha256(string $path): ?string
