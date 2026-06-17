@@ -12,20 +12,25 @@ OUTDIR=$(mktemp -d /tmp/satiate-www-XXXX)
 TMPDIR=$(mktemp -d /tmp/satiate-test-XXXX)
 trap 'rm -rf "$OUTDIR" "$TMPDIR"; kill $(lsof -ti:8888) 2>/dev/null || true' EXIT
 
-echo "=== 1. Building repository ==="
+echo "=== 1. Building repository with all vendor-bin sources ==="
 
+# Include all package sources: root vendor + each vendor-bin
 cat > "$TMPDIR/satis.json" << SATIS
 {
     "name": "Dogfood Repository",
     "homepage": "http://localhost:8888",
     "repositories": [
-        {"type": "path", "url": "$PROJECT_ROOT/vendor/*/*"}
+        {"type": "path", "url": "$PROJECT_ROOT/vendor/*/*"},
+        {"type": "path", "url": "$PROJECT_ROOT/.vendor-bin/phpstan/vendor/*/*"},
+        {"type": "path", "url": "$PROJECT_ROOT/.vendor-bin/easycs/vendor/*/*"},
+        {"type": "path", "url": "$PROJECT_ROOT/.vendor-bin/phpunit/vendor/*/*"}
     ],
     "require": {
-        "psr/container": "^2.0",
-        "nikic/php-parser": "^5.7",
         "symfony/console": "^8.1",
-        "php-http/discovery": "^1.19"
+        "nikic/php-parser": "^5.7",
+        "phpunit/phpunit": "^13.2",
+        "php-http/discovery": "^1.19",
+        "phpstan/phpstan": "^2.2"
     },
     "require-all": false,
     "require-dependencies": true,
@@ -41,13 +46,27 @@ SATIS
 "$SATIATE_BIN" build -c "$TMPDIR/satis.json" --output-dir "$OUTDIR" --no-audit 2>&1
 
 echo ""
-echo "=== 2. Starting HTTP server on localhost:8888 ==="
+echo "=== 2. Packages available ==="
+python3 -c "
+import json
+d = json.load(open('$OUTDIR/packages.json'))
+pkgs = d.get('packages', {})
+if isinstance(pkgs, dict):
+    for name, versions in sorted(pkgs.items()):
+        vlist = sorted(versions.keys(), key=str)
+        print(f'  ✅ {name}: {len(vlist)} version(s)')
+else:
+    print(f'  ⚠️ packages is {type(pkgs).__name__} ({len(pkgs)} entries)')
+"
+
+echo ""
+echo "=== 3. Starting HTTP server on localhost:8888 ==="
 php -S localhost:8888 -t "$OUTDIR" &>/tmp/satiate-server.log &
 sleep 1
 curl -s http://localhost:8888/packages.json | python3 -c "import json,sys; d=json.load(sys.stdin); print('Server OK —', len(d.get('available-packages',[])), 'packages available')"
 
 echo ""
-echo "=== 3. Installing packages via HTTP ==="
+echo "=== 4. Installing php-http-discover ==="
 
 mkdir -p "$TMPDIR/test-discovery"
 cat > "$TMPDIR/test-discovery/composer.json" << 'EOF'
@@ -63,23 +82,52 @@ echo ""
 echo "php-http/discovery installed: $(ls -d vendor/php-http/discovery 2>/dev/null || echo 'MISSING!')"
 
 echo ""
-echo "=== 4. Installing packages with dev deps ==="
+echo "=== 5. Installing Symfony Console (with deps) ==="
 
-mkdir -p "$TMPDIR/test-full"
-cat > "$TMPDIR/test-full/composer.json" << 'EOF'
+mkdir -p "$TMPDIR/test-console"
+cat > "$TMPDIR/test-console/composer.json" << 'EOF'
 {
-    "name": "satiate/test-full",
+    "name": "satiate/test-console",
     "repositories": [{"type": "composer", "url": "http://localhost:8888"}],
     "require": {"symfony/console": "^8.1"},
     "config": {"secure-http": false}
 }
 EOF
-cd "$TMPDIR/test-full" && composer install --no-interaction 2>&1 | tail -5
-echo ""
-echo "symfony/console installed: $(ls -d vendor/symfony/console 2>/dev/null || echo 'MISSING!')"
+cd "$TMPDIR/test-console" && composer install --no-interaction 2>&1 | tail -5
+echo "symfony/console: $(ls -d vendor/symfony/console 2>/dev/null || echo 'MISSING!')"
 
 echo ""
-echo "=== 5. Audit the repository ==="
+echo "=== 6. Installing PHPStan (from phpstan vendor-bin) ==="
+
+mkdir -p "$TMPDIR/test-phpstan"
+cat > "$TMPDIR/test-phpstan/composer.json" << 'EOF'
+{
+    "name": "satiate/test-phpstan",
+    "repositories": [{"type": "composer", "url": "http://localhost:8888"}],
+    "require": {"phpstan/phpstan": "^2.2"},
+    "config": {"secure-http": false}
+}
+EOF
+cd "$TMPDIR/test-phpstan" && composer install --no-interaction 2>&1 | tail -5
+echo "phpstan/phpstan: $(ls -d vendor/phpstan/phpstan 2>/dev/null || echo 'MISSING!')"
+
+echo ""
+echo "=== 7. Installing PHPUnit (from phpunit vendor-bin) ==="
+
+mkdir -p "$TMPDIR/test-phpunit"
+cat > "$TMPDIR/test-phpunit/composer.json" << 'EOF'
+{
+    "name": "satiate/test-phpunit",
+    "repositories": [{"type": "composer", "url": "http://localhost:8888"}],
+    "require": {"phpunit/phpunit": "^13.2"},
+    "config": {"secure-http": false}
+}
+EOF
+cd "$TMPDIR/test-phpunit" && composer install --no-interaction 2>&1 | tail -5
+echo "phpunit/phpunit: $(ls -d vendor/phpunit/phpunit 2>/dev/null || echo 'MISSING!')"
+
+echo ""
+echo "=== 8. Audit the repository ==="
 "$SATIATE_BIN" audit --path "$OUTDIR" 2>&1 | tail -5
 
 echo ""
