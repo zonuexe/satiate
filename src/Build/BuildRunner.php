@@ -8,11 +8,17 @@ use Composer\Factory;
 use Composer\IO\NullIO;
 use Composer\Json\JsonFile;
 use Composer\MetadataMinifier\MetadataMinifier;
+use Composer\Package\CompletePackageInterface;
 use Composer\Repository\RepositorySet;
 use Satiate\Config\SatisConfig;
 
 final class BuildRunner
 {
+    /**
+     * @var list<CompletePackageInterface>
+     */
+    private array $resolvedPackages = [];
+
     public function __construct(
         private readonly SatisConfig $config,
         private readonly string $outputDir,
@@ -30,9 +36,13 @@ final class BuildRunner
             }
         }
 
-        $packages = $this->resolvePackages();
+        $this->resolvePackages();
 
-        $this->generatePackagesJson($outputDir, $packages);
+        $this->downloadDistArchives($outputDir);
+
+        $serialized = $this->serializePackages($outputDir);
+
+        $this->generatePackagesJson($outputDir, $serialized);
 
         if ($this->runAudit) {
             // Audit step — not yet implemented
@@ -41,10 +51,7 @@ final class BuildRunner
         return 0;
     }
 
-    /**
-     * @return list<array<string, mixed>>
-     */
-    private function resolvePackages(): array
+    private function resolvePackages(): void
     {
         $io = new NullIO();
         $composer = Factory::create($io, [
@@ -68,34 +75,86 @@ final class BuildRunner
 
         $pool = $repositorySet->createPoolWithAllPackages();
 
-        $packages = [];
-
         foreach ($pool->getPackages() as $package) {
-            $packageData = $this->packageToArray($package);
+            if ($package instanceof CompletePackageInterface && $package->getType() !== 'metapackage') {
+                $this->resolvedPackages[] = $package;
+            }
+        }
+    }
 
-            if ($packageData !== null) {
-                $packages[] = $packageData;
+    /**
+     * @return list<array<string, mixed>>
+     */
+    private function serializePackages(string $outputDir): array
+    {
+        $result = [];
+
+        foreach ($this->resolvedPackages as $package) {
+            $data = $this->packageToArray($package, $outputDir);
+
+            if ($data !== null) {
+                $result[] = $data;
             }
         }
 
-        return $packages;
+        return $result;
+    }
+
+    private function downloadDistArchives(string $outputDir): void
+    {
+        $distDir = $outputDir . '/dist';
+
+        if (! is_dir($distDir)) {
+            if (! mkdir($distDir, 0755, true) && ! is_dir($distDir)) {
+                throw new \RuntimeException(\sprintf('Failed to create dist directory: %s', $distDir));
+            }
+        }
+
+        $io = new NullIO();
+        $composer = Factory::create($io, [
+            'repositories' => [
+                'packagist' => false,
+            ],
+        ], false, true);
+
+        $archiveManager = $composer->getArchiveManager();
+
+        foreach ($this->resolvedPackages as $package) {
+            $packageName = $package->getPrettyName();
+
+            $expectedFilename = \sprintf(
+                '%s-%s.%s',
+                str_replace('/', '-', $packageName),
+                $package->getPrettyVersion(),
+                'zip',
+            );
+            $expectedPath = $distDir . '/' . $expectedFilename;
+
+            if (is_file($expectedPath)) {
+                continue;
+            }
+
+            $createdPath = $archiveManager->archive($package, 'zip', $distDir);
+
+            if ($createdPath !== $expectedPath && is_file($createdPath)) {
+                rename($createdPath, $expectedPath);
+            }
+        }
     }
 
     /**
      * @return array<string, mixed>|null
      */
-    private function packageToArray(\Composer\Package\PackageInterface $package): ?array
+    private function packageToArray(CompletePackageInterface $package, string $outputDir): ?array
     {
-        if ($package->getType() === 'metapackage') {
-            return null;
-        }
-
         $requires = [];
+
         foreach ($package->getRequires() as $link) {
             $requires[$link->getTarget()] = $link->getPrettyConstraint();
         }
 
         $devRequires = [];
+
         foreach ($package->getDevRequires() as $link) {
             $devRequires[$link->getTarget()] = $link->getPrettyConstraint();
         }
@@ -103,6 +162,7 @@ final class BuildRunner
         $suggests = $package->getSuggests();
 
         $source = null;
+
         if ($package->getSourceType() !== null) {
             $source = [
                 'type' => $package->getSourceType(),
@@ -112,12 +172,20 @@ final class BuildRunner
         }
 
         $dist = null;
+
         if ($package->getDistType() !== null) {
+            $archiveFilename = \sprintf(
+                '%s-%s.%s',
+                str_replace('/', '-', $package->getPrettyName()),
+                $package->getPrettyVersion(),
+                'zip',
+            );
+
             $dist = [
-                'type' => $package->getDistType(),
-                'url' => $package->getDistUrl(),
+                'type' => 'zip',
+                'url' => $this->archiveUrlForPackage($outputDir, $archiveFilename),
                 'reference' => $package->getDistReference(),
-                'shasum' => $package->getDistSha1Checksum(),
+                'shasum' => $this->computeSha256($outputDir . '/dist/' . $archiveFilename),
             ];
         }
 
@@ -145,6 +213,37 @@ final class BuildRunner
         return array_filter($data, fn(mixed $value): bool => $value !== null && $value !== []);
     }
 
+    private function archiveUrlForPackage(string $outputDir, string $archiveFilename): string
+    {
+        if ($this->config->archive !== null && isset($this->config->archive['prefix-url'])) {
+            return \sprintf(
+                '%s/dist/%s',
+                rtrim($this->config->archive['prefix-url'], '/'),
+                $archiveFilename,
+            );
+        }
+
+        return \sprintf(
+            '%s/dist/%s',
+            rtrim($this->config->homepage, '/'),
+            $archiveFilename,
+        );
+    }
+
+    private function computeSha256(string $path): ?string
+    {
+        if (! is_file($path)) {
+            return null;
+        }
+
+        $hash = hash_file('sha256', $path);
+
+        return $hash !== false ? $hash : null;
+    }
+
+    /**
+     * @param list<array<string, mixed>> $packages
+     */
     private function generatePackagesJson(string $outputDir, array $packages): void
     {
         $grouped = [];
