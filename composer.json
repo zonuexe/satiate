@@ -10,6 +10,8 @@
     },
     "require-dev": {
         "bamarni/composer-bin-plugin": "*",
+        "phan/phan": "^6.0",
+        "php-http/discovery": "^1.19",
         "spatie/phpunit-snapshot-assertions": "^5.4"
     },
     "autoload": {

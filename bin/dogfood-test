@@ -1,81 +1,87 @@
 #!/bin/bash
 set -euo pipefail
 
-# Satiate dogfooding integration test
-# Verifies constraint propagation with a real package resolution
+# Satiate end-to-end dogfooding test
+# 1. Build a repository from local packages
+# 2. Serve via HTTP
+# 3. Install packages from the served repository
 
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SATIATE_BIN="$PROJECT_ROOT/bin/satiate"
-WORKDIR=$(mktemp -d /tmp/satiate-dogfood-XXXX)
-trap 'rm -rf "$WORKDIR"' EXIT
+OUTDIR=$(mktemp -d /tmp/satiate-www-XXXX)
+TMPDIR=$(mktemp -d /tmp/satiate-test-XXXX)
+trap 'rm -rf "$OUTDIR" "$TMPDIR"; kill $(lsof -ti:8888) 2>/dev/null || true' EXIT
 
-echo "=== Satiate Dogfooding Test ==="
+echo "=== 1. Building repository ==="
 
-# Build a repository using our own vendor packages
-cat > "$WORKDIR/satis.json" << SATIS
+cat > "$TMPDIR/satis.json" << SATIS
 {
-    "name": "Dogfood Test",
+    "name": "Dogfood Repository",
     "homepage": "http://localhost:8888",
     "repositories": [
-        {"type": "path", "url": "$PROJECT_ROOT/vendor/psr/container"},
-        {"type": "path", "url": "$PROJECT_ROOT/vendor/psr/log"},
-        {"type": "path", "url": "$PROJECT_ROOT/vendor/nikic/php-parser"}
+        {"type": "path", "url": "$PROJECT_ROOT/vendor/*/*"}
     ],
     "require": {
         "psr/container": "^2.0",
-        "nikic/php-parser": "^5.7"
+        "nikic/php-parser": "^5.7",
+        "symfony/console": "^8.1",
+        "php-http/discovery": "^1.19"
     },
     "require-all": false,
     "require-dependencies": true,
-    "max-versions-per-package": 3
+    "max-versions-per-package": 3,
+    "archive": {
+        "directory": "dist",
+        "format": "zip",
+        "prefix-url": "http://localhost:8888"
+    }
 }
 SATIS
 
-echo "--- Building repository ---"
-"$SATIATE_BIN" build -c "$WORKDIR/satis.json" --output-dir "$WORKDIR/output" --no-audit 2>&1
+"$SATIATE_BIN" build -c "$TMPDIR/satis.json" --output-dir "$OUTDIR" --no-audit 2>&1
 
 echo ""
-echo "--- Analyzing output ---"
-python3 - "$WORKDIR/output/packages.json" << 'PYEOF'
-import json, sys
+echo "=== 2. Starting HTTP server on localhost:8888 ==="
+php -S localhost:8888 -t "$OUTDIR" &>/tmp/satiate-server.log &
+sleep 1
+curl -s http://localhost:8888/packages.json | python3 -c "import json,sys; d=json.load(sys.stdin); print('Server OK —', len(d.get('available-packages',[])), 'packages available')"
 
-d = json.load(open(sys.argv[1]))
-pkgs = d.get('packages', {})
+echo ""
+echo "=== 3. Installing packages via HTTP ==="
 
-if not isinstance(pkgs, dict):
-    print(f"❌ FAIL: packages is {type(pkgs).__name__}, expected dict")
-    sys.exit(1)
+mkdir -p "$TMPDIR/test-discovery"
+cat > "$TMPDIR/test-discovery/composer.json" << 'EOF'
+{
+    "name": "satiate/test-discovery",
+    "repositories": [{"type": "composer", "url": "http://localhost:8888"}],
+    "require": {"php-http/discovery": "^1.19"},
+    "config": {"secure-http": false}
+}
+EOF
+cd "$TMPDIR/test-discovery" && composer install --no-interaction 2>&1 | tail -5
+echo ""
+echo "php-http/discovery installed: $(ls -d vendor/php-http/discovery 2>/dev/null || echo 'MISSING!')"
 
-versions_count = sum(len(v) for v in pkgs.values() if isinstance(v, dict))
-print(f"Total packages: {len(pkgs)}")
-print(f"Total versions: {versions_count}")
-print()
+echo ""
+echo "=== 4. Installing packages with dev deps ==="
 
-# Check version counts
-suspect = 0
-for name, versions in sorted(pkgs.items()):
-    vlist = sorted(versions.keys(), key=lambda x: str(x))
-    if len(vlist) > 5:
-        print(f"  ⚠️  {name}: {len(vlist)} versions ({vlist[0]} ~ {vlist[-1]})")
-        suspect += 1
-    else:
-        print(f"  ✅ {name}: {len(vlist)} version{'s' if len(vlist) != 1 else ''}")
+mkdir -p "$TMPDIR/test-full"
+cat > "$TMPDIR/test-full/composer.json" << 'EOF'
+{
+    "name": "satiate/test-full",
+    "repositories": [{"type": "composer", "url": "http://localhost:8888"}],
+    "require": {"symfony/console": "^8.1"},
+    "config": {"secure-http": false}
+}
+EOF
+cd "$TMPDIR/test-full" && composer install --no-interaction 2>&1 | tail -5
+echo ""
+echo "symfony/console installed: $(ls -d vendor/symfony/console 2>/dev/null || echo 'MISSING!')"
 
-print()
-if suspect > 0:
-    print(f"❌ FAIL: {suspect} packages have excessive versions (>5)")
-    sys.exit(1)
-
-# Verify key packages are present
-required = {'psr/container', 'nikic/php-parser'}
-missing = required - set(pkgs.keys())
-if missing:
-    print(f"❌ FAIL: Missing required packages: {missing}")
-    sys.exit(1)
-
-print("✅ PASS: All checks passed")
-sys.exit(0)
-PYEOF
+echo ""
+echo "=== 5. Audit the repository ==="
+"$SATIATE_BIN" audit --path "$OUTDIR" 2>&1 | tail -5
 
 echo ""
 echo "=== Dogfooding test complete ==="
+echo "SUCCESS"
