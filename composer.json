@@ -1,6 +1,7 @@
 {
     "name": "zonuexe/satiate",
     "license": "AGPL-3.0-or-later",
+    "bin": ["bin/satiate"],
     "require": {
         "php": ">=8.5",
         "composer/composer": "^2.10",

@@ -105,6 +105,8 @@ final class Auditor
                         severity: Severity::Warning,
                     );
                 }
+
+                return null;
             }
 
             private function checkEncodedPayload(FuncCall $node, int $line): void
