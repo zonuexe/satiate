@@ -59,36 +59,28 @@ final class LockAnalyzer
             return false;
         }
 
-        $output = shell_exec(\sprintf(
-            'cd %s && git log --oneline --format="%%H" -- composer.lock 2>/dev/null | head -20',
+        $blameOutput = shell_exec(\sprintf(
+            'cd %s && git blame --line-porcelain composer.lock 2>/dev/null',
             escapeshellarg($projectDir),
         ));
 
-        if ($output === null || $output === '') {
+        if ($blameOutput === null || $blameOutput === '') {
             return false;
         }
 
-        $commits = array_filter(explode("\n", $output));
+        $lines = explode("\n", $blameOutput);
+        $commitsTouching = [];
 
-        $reversions = 0;
+        foreach ($lines as $line) {
+            if (str_contains($line, $packageName)) {
+                $commitHash = substr($line, 0, 40);
 
-        foreach ($commits as $commit) {
-            $diffOutput = shell_exec(\sprintf(
-                'cd %s && git show --stat %s -- composer.lock 2>/dev/null | grep -c "%s" || true',
-                escapeshellarg($projectDir),
-                escapeshellarg(trim($commit)),
-                escapeshellarg($packageName),
-            ));
-
-            if ($diffOutput !== null && trim($diffOutput) !== '') {
-                $count = (int) trim($diffOutput);
-
-                if ($count > 0) {
-                    $reversions++;
+                if (ctype_xdigit($commitHash) && strlen($commitHash) === 40) {
+                    $commitsTouching[$commitHash] = true;
                 }
             }
         }
 
-        return $reversions >= 3;
+        return count($commitsTouching) >= 3;
     }
 }

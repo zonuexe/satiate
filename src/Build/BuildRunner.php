@@ -19,6 +19,7 @@ final class BuildRunner
      * @var list<CompletePackageInterface>
      */
     private array $resolvedPackages = [];
+    private ?\Composer\Composer $composer = null;
 
     public function __construct(
         private readonly SatisConfig $config,

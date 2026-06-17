@@ -24,11 +24,13 @@ final class AuditCommand extends Command
 
         $this->addOption('config', 'c', InputOption::VALUE_REQUIRED, 'Path to satis.json', 'satis.json');
         $this->addOption('path', null, InputOption::VALUE_REQUIRED, 'Path to package source to audit');
+        $this->addOption('cache-path', null, InputOption::VALUE_REQUIRED, 'Path to .satiate-cache for change-diff auditing');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
         $path = $input->getOption('path');
+        $cachePath = $input->getOption('cache-path');
 
         if (! \is_string($path) || $path === '') {
             $output->writeln('<error>--path is required for standalone audit</error>');
@@ -42,9 +44,24 @@ final class AuditCommand extends Command
             return self::FAILURE;
         }
 
+        $auditedFiles = [];
+
+        if (\is_string($cachePath) && $cachePath !== '' && is_file($cachePath . '/audited-files.json')) {
+            $cacheContent = file_get_contents($cachePath . '/audited-files.json');
+
+            if ($cacheContent !== false) {
+                $decoded = json_decode($cacheContent, true);
+
+                if (is_array($decoded)) {
+                    $auditedFiles = $decoded;
+                }
+            }
+        }
+
         $auditor = new Auditor();
         $totalResults = 0;
         $files = $this->phpFilesIn($path);
+        $newlyAudited = [];
 
         if ($files === []) {
             $output->writeln(\sprintf('<info>No PHP files found in %s</info>', $path));
@@ -53,6 +70,12 @@ final class AuditCommand extends Command
         }
 
         foreach ($files as $file) {
+            $mtime = filemtime($file);
+
+            if (isset($auditedFiles[$file]) && $auditedFiles[$file] === $mtime) {
+                continue;
+            }
+
             $results = $auditor->auditFile('', '', $file);
 
             foreach ($results as $result) {
@@ -74,6 +97,17 @@ final class AuditCommand extends Command
 
                 $totalResults++;
             }
+
+            $newlyAudited[$file] = $mtime;
+        }
+
+        if (\is_string($cachePath) && $cachePath !== '' && $newlyAudited !== []) {
+            if (!is_dir($cachePath)) {
+                mkdir($cachePath, 0755, true);
+            }
+
+            $merged = array_merge($auditedFiles, $newlyAudited);
+            file_put_contents($cachePath . '/audited-files.json', json_encode($merged, JSON_PRETTY_PRINT));
         }
 
         if ($totalResults === 0) {
