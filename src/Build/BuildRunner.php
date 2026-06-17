@@ -45,6 +45,8 @@ final class BuildRunner
 
         $this->generatePackagesJson($outputDir, $serialized);
 
+        $this->generateWebUi($outputDir, $serialized);
+
         if ($this->runAudit) {
             $this->auditStep($outputDir);
         }
@@ -370,5 +372,70 @@ final class BuildRunner
             $providerFile = new JsonFile($providerDir . '/' . $packagePath . '.json');
             $providerFile->write($providerData);
         }
+    }
+
+    /**
+     * @param list<array<string, mixed>> $packages
+     */
+    private function generateWebUi(string $outputDir, array $packages): void
+    {
+        $repoName = $this->config->name;
+        $homepage = $this->config->homepage;
+
+        $rows = '';
+
+        foreach ($packages as $pkg) {
+            $name = $pkg['name'] ?? '';
+            $version = $pkg['version'] ?? '';
+            $description = $pkg['description'] ?? '';
+            $type = $pkg['type'] ?? '';
+            $license = \is_array($pkg['license'] ?? null) ? \implode(', ', $pkg['license']) : ($pkg['license'] ?? '');
+
+            $distUrl = $pkg['dist']['url'] ?? '';
+            $distHtml = $distUrl !== '' ? \sprintf('<a href="%s">download</a>', $distUrl) : '';
+
+            $rows .= \sprintf(
+                "<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>\n",
+                \htmlspecialchars($name),
+                \htmlspecialchars($version),
+                \htmlspecialchars($description),
+                \htmlspecialchars($type),
+                \htmlspecialchars($license),
+                $distHtml,
+            );
+        }
+
+        $html = <<<HTML
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{$repoName}</title>
+<style>
+body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;max-width:1200px;margin:0 auto;padding:20px;color:#333}
+h1{border-bottom:2px solid #4a9;padding-bottom:8px}
+table{width:100%;border-collapse:collapse;margin-top:12px}
+th,td{padding:8px 12px;text-align:left;border-bottom:1px solid #ddd}
+th{background:#f5f5f5;position:sticky;top:0}
+tr:hover{background:#f0f8ff}
+.meta{color:#666;font-size:14px}
+a{color:#4a9;text-decoration:none}
+</style>
+</head>
+<body>
+<h1>{$repoName}</h1>
+<p class="meta"><a href="{$homepage}">{$homepage}</a> &middot; <a href="packages.json">packages.json</a></p>
+<table>
+<thead><tr><th>Package</th><th>Version</th><th>Description</th><th>Type</th><th>License</th><th>Dist</th></tr></thead>
+<tbody>
+{$rows}
+</tbody>
+</table>
+</body>
+</html>
+HTML;
+
+        file_put_contents($outputDir . '/index.html', $html);
     }
 }
