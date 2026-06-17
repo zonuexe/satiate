@@ -180,7 +180,7 @@ final class BuildRunner
             $rm->addRepository($repository);
         }
 
-        $minimumStability = 'stable';
+        $minimumStability = 'dev';
         $repositorySet = new RepositorySet($minimumStability, [], [], [], []);
 
         foreach ($rm->getRepositories() as $repository) {
@@ -191,12 +191,12 @@ final class BuildRunner
             try {
                 $pool = $repositorySet->createPoolWithAllPackages();
             } catch (\LogicException $e) {
-                $allNames = $this->collectAllPackageNames($rm);
+                $allNames = $this->filterPackageNames($this->collectAllPackageNames($rm));
                 $pool = $repositorySet->createPoolForPackages($allNames);
             }
         } else {
             $initialNames = array_keys($this->config->require);
-            $allNames = $initialNames;
+            $allNames = $this->filterPackageNames($initialNames);
 
             $pool = $repositorySet->createPoolForPackages($allNames);
 
@@ -215,6 +215,10 @@ final class BuildRunner
                     foreach ($pkg->getRequires() as $link) {
                         $depName = $link->getTarget();
 
+                        if ($this->isPlatformPackage($depName)) {
+                            continue;
+                        }
+
                         if (! in_array($depName, $allNames, true)) {
                             $allNames[] = $depName;
                         }
@@ -224,6 +228,10 @@ final class BuildRunner
                 if ($this->includeDev || $this->config->requireDevDependencies) {
                     foreach ($pkg->getDevRequires() as $link) {
                         $depName = $link->getTarget();
+
+                        if ($this->isPlatformPackage($depName)) {
+                            continue;
+                        }
 
                         if (! in_array($depName, $allNames, true)) {
                             $allNames[] = $depName;
@@ -260,6 +268,23 @@ final class BuildRunner
         }
 
         return array_values(array_unique($names));
+    }
+
+    private function isPlatformPackage(string $packageName): bool
+    {
+        return str_starts_with($packageName, 'php')
+            || str_starts_with($packageName, 'ext-')
+            || str_starts_with($packageName, 'lib-')
+            || \in_array($packageName, ['php', 'composer-plugin-api', 'composer-runtime-api', 'composer-installers'], true);
+    }
+
+    /**
+     * @param list<string> $names
+     * @return list<string>
+     */
+    private function filterPackageNames(array $names): array
+    {
+        return array_values(array_filter($names, fn(string $name): bool => ! $this->isPlatformPackage($name)));
     }
 
     /**
