@@ -477,6 +477,7 @@ final class BuildRunner
             'name' => $package->getPrettyName(),
             'version' => $package->getPrettyVersion(),
             'version_normalized' => $package->getVersion(),
+            'uid' => \md5($package->getPrettyName() . '-' . $package->getPrettyVersion()),
             'type' => $package->getType(),
             'description' => $package->getDescription(),
             'keywords' => $package->getKeywords(),
