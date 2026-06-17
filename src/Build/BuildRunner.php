@@ -190,8 +190,44 @@ final class BuildRunner
         if ($this->config->requireAll) {
             $pool = $repositorySet->createPoolWithAllPackages();
         } else {
-            $requiredPackages = array_keys($this->config->require);
-            $pool = $repositorySet->createPoolForPackages($requiredPackages);
+            $initialNames = array_keys($this->config->require);
+            $allNames = $initialNames;
+
+            $pool = $repositorySet->createPoolForPackages($allNames);
+
+            $seen = [];
+
+            foreach ($pool->getPackages() as $pkg) {
+                $name = $pkg->getPrettyName();
+
+                if (isset($seen[$name])) {
+                    continue;
+                }
+
+                $seen[$name] = true;
+
+                if ($this->config->requireDependencies) {
+                    foreach ($pkg->getRequires() as $link) {
+                        $depName = $link->getTarget();
+
+                        if (! in_array($depName, $allNames, true)) {
+                            $allNames[] = $depName;
+                        }
+                    }
+                }
+
+                if ($this->config->requireDevDependencies) {
+                    foreach ($pkg->getDevRequires() as $link) {
+                        $depName = $link->getTarget();
+
+                        if (! in_array($depName, $allNames, true)) {
+                            $allNames[] = $depName;
+                        }
+                    }
+                }
+            }
+
+            $pool = $repositorySet->createPoolForPackages($allNames);
         }
 
         foreach ($pool->getPackages() as $package) {
