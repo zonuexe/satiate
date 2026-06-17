@@ -5,6 +5,6 @@ parameters:
 		- src
 	bootstrapFiles:
 		- vendor/autoload.php
-		- vendor-bin/easycs/vendor/symplify/easy-coding-standard/vendor/autoload.php
+		- .vendor-bin/easycs/vendor/symplify/easy-coding-standard/vendor/autoload.php
 includes:
-	- vendor-bin/phpstan/vendor/phpstan/phpstan/conf/bleedingEdge.neon
+	- .vendor-bin/phpstan/vendor/phpstan/phpstan/conf/bleedingEdge.neon

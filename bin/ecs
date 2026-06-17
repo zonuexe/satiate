@@ -1,2 +1,2 @@
 #!/bin/sh
-exec php vendor-bin/easycs/vendor/symplify/easy-coding-standard/bin/ecs "$@"
+exec php .vendor-bin/easycs/vendor/symplify/easy-coding-standard/bin/ecs "$@"
