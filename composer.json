@@ -15,6 +15,11 @@
             "Satiate\\": "src/"
         }
     },
+    "autoload-dev": {
+        "psr-4": {
+            "Satiate\\Tests\\": "tests/"
+        }
+    },
     "config": {
         "sort-packages": true,
         "allow-plugins": {

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Satiate;
 
+use Satiate\Command\BuildCommand;
 use Symfony\Component\Console\Application as SymfonyApplication;
 
 final class Application extends SymfonyApplication
@@ -15,5 +16,7 @@ final class Application extends SymfonyApplication
     public function __construct()
     {
         parent::__construct(self::NAME, self::VERSION);
+
+        $this->addCommand(new BuildCommand());
     }
 }

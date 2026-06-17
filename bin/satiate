@@ -1,0 +1,20 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+use Satiate\Application;
+
+(static function (): void {
+    $autoload = __DIR__ . '/../vendor/autoload.php';
+
+    if (!is_file($autoload)) {
+        fwrite(STDERR, 'Install dependencies via "composer install" first.' . PHP_EOL);
+        exit(1);
+    }
+
+    require $autoload;
+
+    $application = new Application();
+    $application->run();
+})();
