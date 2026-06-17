@@ -4,6 +4,7 @@
     "require": {
         "php": ">=8.5",
         "composer/composer": "^2.10",
+        "nikic/php-parser": "^5.7",
         "symfony/console": "^8.1"
     },
     "require-dev": {
