@@ -64,12 +64,34 @@ final class BuildRunner
             }
         }
 
+        $auditedPath = $cacheDir . '/audited-versions.json';
+        $audited = [];
+
+        if (is_file($auditedPath)) {
+            $content = file_get_contents($auditedPath);
+
+            if ($content !== false) {
+                $decoded = json_decode($content, true);
+
+                if (is_array($decoded)) {
+                    $audited = $decoded;
+                }
+            }
+        }
+
         $auditor = new Auditor();
         $totalFindings = 0;
+        $newlyAudited = [];
 
         foreach ($this->resolvedPackages as $package) {
             $packageName = $package->getPrettyName();
             $version = $package->getPrettyVersion();
+
+            $packageKey = $packageName . ':' . $version;
+
+            if (isset($audited[$packageKey])) {
+                continue;
+            }
 
             $distDir = $outputDir . '/dist';
             $archiveFilename = \sprintf(
@@ -110,6 +132,18 @@ final class BuildRunner
 
                 $this->rmdir($tmpDir);
             }
+
+            $newlyAudited[] = $packageKey;
+        }
+
+        if ($newlyAudited !== []) {
+            foreach ($newlyAudited as $key) {
+                $audited[$key] = [
+                    'audited_at' => date('c'),
+                ];
+            }
+
+            file_put_contents($auditedPath, json_encode($audited, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
         }
     }
 
