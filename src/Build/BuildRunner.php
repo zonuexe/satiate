@@ -384,9 +384,8 @@ final class BuildRunner
 
     private function downloadDistArchives(string $outputDir): void
     {
-        $archiveConfig = $this->config->archive;
-        $distDirName = ($archiveConfig['directory'] ?? 'dist');
-        $archiveFormat = ($archiveConfig['format'] ?? 'zip');
+        $distDirName = $this->archiveDirName();
+        $archiveFormat = $this->archiveFormatName();
         $distDir = $outputDir . '/' . $distDirName;
 
         if (! is_dir($distDir)) {
@@ -639,8 +638,8 @@ final class BuildRunner
      */
     private function generateWebUi(string $outputDir, array $packages): void
     {
-        $repoName = $this->config->name;
-        $homepage = $this->config->homepage;
+        $repoName = \htmlspecialchars($this->config->name);
+        $homepage = \htmlspecialchars($this->config->homepage);
 
         $rows = '';
 
@@ -652,7 +651,7 @@ final class BuildRunner
             $license = \is_array($pkg['license'] ?? null) ? \implode(', ', $pkg['license']) : ($pkg['license'] ?? '');
 
             $distUrl = $pkg['dist']['url'] ?? '';
-            $distHtml = $distUrl !== '' ? \sprintf('<a href="%s">download</a>', $distUrl) : '';
+            $distHtml = $distUrl !== '' ? \sprintf('<a href="%s">download</a>', \htmlspecialchars($distUrl)) : '';
 
             $rows .= \sprintf(
                 "<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>\n",

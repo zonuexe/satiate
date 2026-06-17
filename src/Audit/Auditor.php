@@ -23,6 +23,10 @@ final class Auditor
 
     private string $currentFile = '';
 
+    private string $currentPackage = '';
+
+    private string $currentVersion = '';
+
     /**
      * Audit a single file for suspicious patterns.
      *
@@ -42,17 +46,18 @@ final class Auditor
 
         $this->results = [];
         $this->currentFile = $filePath;
+        $this->currentPackage = $package;
+        $this->currentVersion = $version;
 
         $parser = (new ParserFactory())->createForVersion(PhpVersion::fromComponents(8, 4));
         $traverser = new NodeTraverser();
 
-        $traverser->addVisitor(new class($this, $contents) extends NodeVisitorAbstract {
+        $traverser->addVisitor(new class($this) extends NodeVisitorAbstract {
             public function __construct(
                 private readonly Auditor $auditor,
-                private readonly string $contents,
             ) {}
 
-            public function enterNode(Node $node): void
+            public function enterNode(Node $node): ?Node
             {
                 if ($node instanceof Eval_) {
                     $this->auditor->addResult(
@@ -176,7 +181,9 @@ final class Auditor
             return [];
         }
 
-        $traverser->traverse($stmts);
+        if ($stmts !== null) {
+            $traverser->traverse($stmts);
+        }
 
         return $this->results();
     }
@@ -188,8 +195,8 @@ final class Auditor
         Severity $severity = Severity::Warning,
     ): void {
         $this->results[] = new AuditResult(
-            package: '',
-            version: '',
+            package: $this->currentPackage,
+            version: $this->currentVersion,
             file: $this->currentFile,
             line: $line,
             pattern: $pattern,
