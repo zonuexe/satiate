@@ -1,0 +1,29 @@
+{
+    "name": "Full Repo",
+    "homepage": "https://full.example.com",
+    "repositories": [
+        {
+            "type": "vcs",
+            "url": "https://github.com/org/package-a",
+            "name": "org/package-a"
+        },
+        {
+            "type": "vcs",
+            "url": "https://github.com/org/package-b"
+        }
+    ],
+    "require": {
+        "org/package-a": "^1.0",
+        "org/package-b": "^2.0"
+    },
+    "require-all": true,
+    "require-dependencies": false,
+    "require-dev-dependencies": true,
+    "max-versions-per-package": 5,
+    "archive": {
+        "directory": "dist",
+        "format": "zip",
+        "prefix-url": "https://full.example.com",
+        "skip-dev": false
+    }
+}

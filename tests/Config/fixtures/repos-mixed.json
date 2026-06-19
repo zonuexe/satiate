@@ -1,0 +1,29 @@
+{
+    "name": "Repos Mixed",
+    "homepage": "https://example.com",
+    "repositories": [
+        {
+            "type": "vcs",
+            "url": "https://github.com/org/valid-repo"
+        },
+        "not-an-array-entry",
+        {
+            "type": "vcs"
+        },
+        {
+            "url": "https://github.com/org/no-type"
+        },
+        {
+            "type": 123,
+            "url": "https://github.com/org/non-string-type"
+        },
+        {
+            "type": "vcs",
+            "url": 456
+        },
+        {
+            "type": "composer",
+            "url": "https://github.com/org/valid-repo-2"
+        }
+    ]
+}

@@ -1,0 +1,7 @@
+{
+    "name": "Archive Missing Fields",
+    "homepage": "https://example.com",
+    "archive": {
+        "format": "zip"
+    }
+}

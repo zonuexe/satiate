@@ -1,0 +1,10 @@
+{
+    "name": 12345,
+    "homepage": 67890,
+    "repositories": "not-an-array",
+    "require": "not-an-array",
+    "require-all": "not-bool",
+    "require-dependencies": "not-bool",
+    "require-dev-dependencies": "not-bool",
+    "max-versions-per-package": "not-int"
+}

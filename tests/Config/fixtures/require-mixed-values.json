@@ -1,0 +1,10 @@
+{
+    "name": "Mixed Require",
+    "homepage": "https://example.com",
+    "require": {
+        "valid/pkg": "^1.0",
+        "another/pkg": "^2.0",
+        "skip-int-value": 123,
+        "skip-array-value": ["foo"]
+    }
+}

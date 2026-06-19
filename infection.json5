@@ -19,7 +19,9 @@
         "summary": "output/infection-summary.log",
         "html": "output/infection.html"
     },
-    // Regression floor = current MSI (160/246 killed). Raise as the suite is hardened.
-    "minMsi": 65,
-    "minCoveredMsi": 65
+    // Hardened: 342/358 killed (Covered MSI ~95%); the 16 remaining are documented equivalents.
+    // minCoveredMsi guards covered-code test quality tightly; minMsi leaves a little headroom for
+    // new code before it must be mutation-tested too.
+    "minMsi": 90,
+    "minCoveredMsi": 95
 }

@@ -136,6 +136,8 @@ final class LockCommand extends Command
 
         if ($written === false) {
             $output->writeln(\sprintf('<error>Failed to write %s</error>', $configPath));
+
+            return;
         }
 
         $output->writeln(\sprintf('<info>Updated %s</info>', $configPath));
