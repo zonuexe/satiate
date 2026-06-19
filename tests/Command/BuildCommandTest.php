@@ -25,6 +25,29 @@ final class BuildCommandTest extends TestCase
         self::assertSame('build', $command->getName());
     }
 
+    public function testConfigureRegistersDescriptionAndOptions(): void
+    {
+        $command = new BuildCommand();
+        self::assertSame('Build static Composer repository from satis.json', $command->getDescription());
+
+        $definition = $command->getDefinition();
+
+        self::assertTrue($definition->hasOption('config'));
+        self::assertSame('c', $definition->getOption('config')->getShortcut());
+        self::assertTrue($definition->getOption('config')->isValueRequired());
+        self::assertSame('satis.json', $definition->getOption('config')->getDefault());
+
+        self::assertTrue($definition->hasOption('output-dir'));
+        self::assertTrue($definition->getOption('output-dir')->isValueRequired());
+        self::assertSame('output', $definition->getOption('output-dir')->getDefault());
+
+        self::assertTrue($definition->hasOption('no-audit'));
+        self::assertFalse($definition->getOption('no-audit')->acceptValue());
+
+        self::assertTrue($definition->hasOption('include-dev'));
+        self::assertFalse($definition->getOption('include-dev')->acceptValue());
+    }
+
     public function testExecuteWithNonExistentConfig(): void
     {
         $command = new BuildCommand();

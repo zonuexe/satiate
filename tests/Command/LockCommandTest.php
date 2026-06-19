@@ -18,6 +18,26 @@ final class LockCommandTest extends TestCase
         self::assertSame('lock', $command->getName());
     }
 
+    public function testConfigureRegistersDescriptionAndOptions(): void
+    {
+        $command = new LockCommand();
+        self::assertSame('Derive minimum version constraints from composer.lock', $command->getDescription());
+
+        $definition = $command->getDefinition();
+
+        self::assertTrue($definition->hasOption('lock'));
+        self::assertTrue($definition->getOption('lock')->isValueRequired());
+        self::assertSame('composer.lock', $definition->getOption('lock')->getDefault());
+
+        self::assertTrue($definition->hasOption('dry-run'));
+        self::assertFalse($definition->getOption('dry-run')->acceptValue());
+
+        self::assertTrue($definition->hasOption('config'));
+        self::assertSame('c', $definition->getOption('config')->getShortcut());
+        self::assertTrue($definition->getOption('config')->isValueRequired());
+        self::assertSame('satis.json', $definition->getOption('config')->getDefault());
+    }
+
     public function testExecuteWithNonExistentLockFile(): void
     {
         $command = new LockCommand();

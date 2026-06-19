@@ -1,0 +1,25 @@
+{
+    // Infection (mutation testing) config. Run with: ./bin/infection
+    "$schema": ".vendor-bin/infection/vendor/infection/infection/resources/schema.json",
+    "source": {
+        "directories": ["src"]
+    },
+    // phpunit lives under .vendor-bin (bamarni composer-bin layout), not vendor/bin.
+    // configDir points at a dedicated relaxed config (tools/infection/phpunit.xml.dist) so the
+    // coverage run isn't truncated by the strict root config's risky tests + Infection's stopOnDefect.
+    "phpUnit": {
+        "configDir": "tools/infection",
+        "customPath": ".vendor-bin/phpunit/vendor/bin/phpunit"
+    },
+    "mutators": {
+        "@default": true
+    },
+    "logs": {
+        "text": "output/infection.log",
+        "summary": "output/infection-summary.log",
+        "html": "output/infection.html"
+    },
+    // Regression floor = current MSI (160/246 killed). Raise as the suite is hardened.
+    "minMsi": 65,
+    "minCoveredMsi": 65
+}

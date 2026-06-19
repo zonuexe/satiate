@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Dedicated PHPUnit config for Infection's coverage run ONLY.
+  The project's root phpunit.xml.dist is intentionally strict (requireCoverageMetadata,
+  beStrictAboutCoverageMetadata, failOnRisky/Warning). Under code coverage that strictness marks
+  many tests "risky"; Infection adds stopOnDefect=true to its generated config, so the initial
+  coverage run stops at the first risky test and collects only partial coverage — making well-tested
+  code look uncovered and its mutants "escape". This relaxed config avoids the riskiness so coverage
+  is complete. Normal `./bin/phpunit` / `make test` keep using the strict root config.
+-->
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="https://schema.phpunit.de/13.2/phpunit.xsd"
+         bootstrap="../../vendor/autoload.php"
+         cacheDirectory="../../.phpunit.cache"
+         executionOrder="default">
+    <testsuites>
+        <testsuite name="default">
+            <directory>../../tests</directory>
+        </testsuite>
+    </testsuites>
+
+    <source>
+        <include>
+            <directory>../../src</directory>
+        </include>
+    </source>
+</phpunit>

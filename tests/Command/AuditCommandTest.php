@@ -18,6 +18,25 @@ final class AuditCommandTest extends TestCase
         self::assertSame('audit', $command->getName());
     }
 
+    public function testConfigureRegistersDescriptionAndOptions(): void
+    {
+        $command = new AuditCommand();
+        self::assertSame('Audit packages for suspicious code patterns', $command->getDescription());
+
+        $definition = $command->getDefinition();
+
+        self::assertTrue($definition->hasOption('config'));
+        self::assertSame('c', $definition->getOption('config')->getShortcut());
+        self::assertTrue($definition->getOption('config')->isValueRequired());
+        self::assertSame('satis.json', $definition->getOption('config')->getDefault());
+
+        self::assertTrue($definition->hasOption('path'));
+        self::assertTrue($definition->getOption('path')->isValueRequired());
+
+        self::assertTrue($definition->hasOption('cache-path'));
+        self::assertTrue($definition->getOption('cache-path')->isValueRequired());
+    }
+
     public function testExecuteWithoutPathShowsError(): void
     {
         $command = new AuditCommand();
