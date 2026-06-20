@@ -1,0 +1,23 @@
+name: Infection
+
+# Mutation testing is slow and needs a coverage driver, so it runs on a schedule and on demand
+# rather than on every push/PR. It enforces the MSI gate configured in infection.json5.
+on:
+  schedule:
+    - cron: '0 6 * * 1' # Mondays 06:00 UTC
+  workflow_dispatch:
+
+concurrency:
+  group: infection-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  infection:
+    name: Mutation testing
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/php-setup
+        with:
+          coverage: pcov
+      - run: ./bin/infection --threads=max

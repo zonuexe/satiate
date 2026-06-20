@@ -16,7 +16,7 @@ jobs:
     name: PHPStan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/php-setup
       - run: composer phpstan analyse src/ tests/
 
@@ -24,27 +24,39 @@ jobs:
     name: ECS
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/php-setup
       - run: composer ecs check src/ tests/ bin/
 
   test:
-    name: PHPUnit
+    name: PHPUnit (PHP ${{ matrix.php }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.5']
+        # Forward-looking, non-blocking: surfaces breakage on the upcoming PHP before it ships.
+        include:
+          - php: nightly
+            experimental: true
+    continue-on-error: ${{ matrix.experimental || false }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/php-setup
+        with:
+          php-version: ${{ matrix.php }}
       - run: composer phpunit
 
   dogfood:
     name: Dogfood E2E
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/php-setup
       - run: ./bin/dogfood-test
 
-  # Single required status check for branch protection: green only when every job above passed.
+  # Single required status check for branch protection: green only when every blocking job passed.
+  # The nightly PHP matrix entry is continue-on-error, so it does not affect this gate.
   ci-success:
     name: CI success
     runs-on: ubuntu-latest

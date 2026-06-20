@@ -1,14 +1,22 @@
 name: PHP setup
-description: Set up PHP 8.5 + Composer, cache downloads, and install dependencies (root + bamarni bins).
+description: Set up PHP + Composer, cache downloads, and install dependencies (root + bamarni bins).
+
+inputs:
+  php-version:
+    description: PHP version to set up.
+    default: '8.5'
+  coverage:
+    description: Coverage driver to enable (none, pcov, xdebug).
+    default: none
 
 runs:
   using: composite
   steps:
     - uses: shivammathur/setup-php@v2
       with:
-        php-version: '8.5'
+        php-version: ${{ inputs.php-version }}
         tools: composer:v2
-        coverage: none
+        coverage: ${{ inputs.coverage }}
 
     - name: Resolve Composer cache directory
       id: composer-cache
@@ -16,12 +24,12 @@ runs:
       run: echo "dir=$(composer config --global cache-dir)" >> "$GITHUB_OUTPUT"
 
     - name: Cache Composer downloads
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: ${{ steps.composer-cache.outputs.dir }}
-        key: composer-${{ runner.os }}-php8.5-${{ hashFiles('composer.lock', '.vendor-bin/*/composer.lock') }}
+        key: composer-${{ runner.os }}-php${{ inputs.php-version }}-${{ hashFiles('composer.lock', '.vendor-bin/*/composer.lock') }}
         restore-keys: |
-          composer-${{ runner.os }}-php8.5-
+          composer-${{ runner.os }}-php${{ inputs.php-version }}-
           composer-${{ runner.os }}-
 
     # bamarni's forward-command makes a single `composer install` also install every
