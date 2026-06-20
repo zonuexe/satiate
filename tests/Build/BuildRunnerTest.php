@@ -10,6 +10,8 @@ use Composer\Semver\VersionParser;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Psl\Type;
+use Satiate\Audit\AuditResult;
+use Satiate\Audit\Severity;
 use Satiate\Build\BuildRunner;
 use Satiate\Config\SatisConfig;
 
@@ -168,41 +170,252 @@ final class BuildRunnerTest extends TestCase
     }
 
     // ---------------------------------------------------------------------
-    // computeSha256
+    // archiveFileName
     // ---------------------------------------------------------------------
 
-    public function testComputeSha256ReturnsNullForMissingFile(): void
+    public function testArchiveFileNameJoinsNameVersionAndFormat(): void
+    {
+        $runner = $this->makeRunner($this->config([
+            'archive' => [
+                'directory' => 'dist',
+                'format' => 'tar',
+            ],
+        ]));
+
+        self::assertSame('acme-widget-1.2.3.tar', $this->invoke($runner, 'archiveFileName', 'acme/widget', '1.2.3'));
+    }
+
+    /**
+     * Regression guard: a path/VCS package built on a branch like "fix/foo" gets the version
+     * "dev-fix/foo". The '/' must be flattened in BOTH the name and the version, otherwise the
+     * filename becomes a bogus subdirectory and the dist URL 404s.
+     */
+    public function testArchiveFileNameFlattensSlashesInNameAndVersion(): void
     {
         $runner = $this->makeRunner();
 
-        self::assertNull($this->invoke($runner, 'computeSha256', $this->tmp . '/does-not-exist.zip'));
+        self::assertSame(
+            'acme-widget-dev-fix-foo.zip',
+            $this->invoke($runner, 'archiveFileName', 'acme/widget', 'dev-fix/foo'),
+        );
     }
 
-    public function testComputeSha256MatchesHashFile(): void
+    public function testArchiveFileNameFlattensNonSlashUnsafeCharacters(): void
+    {
+        $runner = $this->makeRunner();
+
+        // A backslash + space run in the version also collapses to a single '-'.
+        self::assertSame(
+            'acme-widget-dev-a-b.zip',
+            $this->invoke($runner, 'archiveFileName', 'acme/widget', 'dev-a\\ b'),
+        );
+    }
+
+    public function testSlugForFilenameKeepsSafeCharactersAndCollapsesUnsafeRuns(): void
+    {
+        $runner = $this->makeRunner();
+
+        // Alphanumerics, dots, underscores and hyphens survive untouched.
+        self::assertSame('Keep.safe_chars-1', $this->invoke($runner, 'slugForFilename', 'Keep.safe_chars-1'));
+        // A run of unsafe characters ('/', space, '\') collapses to one '-'.
+        self::assertSame('a-b', $this->invoke($runner, 'slugForFilename', 'a/ \\b'));
+    }
+
+    // ---------------------------------------------------------------------
+    // computeDistShasum
+    // ---------------------------------------------------------------------
+
+    public function testComputeDistShasumReturnsNullForMissingFile(): void
+    {
+        $runner = $this->makeRunner();
+
+        self::assertNull($this->invoke($runner, 'computeDistShasum', $this->tmp . '/does-not-exist.zip'));
+    }
+
+    public function testComputeDistShasumIsSha1ToMatchComposerVerification(): void
     {
         $runner = $this->makeRunner();
         $path = $this->tmp . '/payload.bin';
         file_put_contents($path, 'hello satiate');
 
-        self::assertSame(hash_file('sha256', $path), $this->invoke($runner, 'computeSha256', $path));
+        // Composer verifies a dist's `shasum` with hash_file('sha1', ...), so the digest must be
+        // SHA-1 — not SHA-256 — otherwise every download from the mirror fails checksum verification.
+        self::assertSame(hash_file('sha1', $path), $this->invoke($runner, 'computeDistShasum', $path));
     }
 
     // ---------------------------------------------------------------------
-    // rmdir
+    // capabilityFingerprint / detectCapabilityChanges (version-diff)
     // ---------------------------------------------------------------------
 
-    public function testRmdirRemovesNestedDirectoryTree(): void
+    public function testCapabilityFingerprintKeepsOnlyWarningAndAbovePatterns(): void
     {
         $runner = $this->makeRunner();
-        $root = $this->tmp . '/nested';
-        mkdir($root . '/a/b', 0755, true);
-        file_put_contents($root . '/top.txt', 'x');
-        file_put_contents($root . '/a/mid.txt', 'y');
-        file_put_contents($root . '/a/b/leaf.txt', 'z');
+        // Adjacent duplicate eval then command_execution: array_unique leaves a key gap, so the
+        // result is only a list if array_values() reindexes it.
+        $results = [
+            new AuditResult('p', '1', 'f', 1, 'eval', 'd', Severity::Critical),
+            new AuditResult('p', '1', 'f', 2, 'eval', 'd', Severity::Critical),
+            new AuditResult('p', '1', 'f', 3, 'command_execution', 'd', Severity::Warning),
+            new AuditResult('p', '1', 'f', 4, 'assert', 'd', Severity::Info),
+        ];
 
-        $this->invoke($runner, 'rmdir', $root);
+        // Coerce key-preserving so a non-reindexed (gappy) result would fail array_is_list().
+        $fingerprint = Type\dict(Type\int(), Type\string())->coerce($this->invoke($runner, 'capabilityFingerprint', $results));
 
-        self::assertDirectoryDoesNotExist($root);
+        self::assertTrue(array_is_list($fingerprint), 'fingerprint must be a reindexed list');
+        sort($fingerprint);
+        // Info-level findings (assert) are excluded; duplicate patterns collapse.
+        self::assertSame(['command_execution', 'eval'], $fingerprint);
+    }
+
+    public function testDetectCapabilityChangesReportsNewIntroductions(): void
+    {
+        $runner = $this->makeRunner();
+
+        $changes = $this->invoke(
+            $runner,
+            'detectCapabilityChanges',
+            [
+                'acme/widget' => [
+                    '1.0.0' => [],
+                    '2.0.0' => ['eval'],
+                ],
+            ],
+            [
+                'acme/widget' => ['2.0.0'],
+            ],
+        );
+
+        self::assertSame([
+            [
+                'package' => 'acme/widget',
+                'version' => '2.0.0',
+                'previousVersion' => '1.0.0',
+                'capability' => 'eval',
+            ],
+        ], $changes);
+    }
+
+    public function testDetectCapabilityChangesReportsEveryIntroducedCapability(): void
+    {
+        // A single new version that gains two capabilities yields two change records (sorted) —
+        // the whole list must be returned, not just the first.
+        $runner = $this->makeRunner();
+
+        $changes = $this->invoke(
+            $runner,
+            'detectCapabilityChanges',
+            [
+                'acme/widget' => [
+                    '1.0.0' => [],
+                    '2.0.0' => ['eval', 'system'],
+                ],
+            ],
+            [
+                'acme/widget' => ['2.0.0'],
+            ],
+        );
+
+        self::assertSame([
+            [
+                'package' => 'acme/widget',
+                'version' => '2.0.0',
+                'previousVersion' => '1.0.0',
+                'capability' => 'eval',
+            ],
+            [
+                'package' => 'acme/widget',
+                'version' => '2.0.0',
+                'previousVersion' => '1.0.0',
+                'capability' => 'system',
+            ],
+        ], $changes);
+    }
+
+    public function testDetectCapabilityChangesIgnoresVersionsNotAuditedThisRun(): void
+    {
+        // Both versions are known, but neither was (re-)audited this run, so nothing is reported —
+        // an unchanged cached package must not re-emit its history every build.
+        $runner = $this->makeRunner();
+
+        $changes = $this->invoke(
+            $runner,
+            'detectCapabilityChanges',
+            [
+                'acme/widget' => [
+                    '1.0.0' => [],
+                    '2.0.0' => ['eval'],
+                ],
+            ],
+            [],
+        );
+
+        self::assertSame([], $changes);
+    }
+
+    public function testDetectCapabilityChangesContinuesPastSkippedPackages(): void
+    {
+        // The first package has no newly-audited version (skipped); the second still reports — the
+        // skip must `continue` to the next package, not `break` out of the loop.
+        $runner = $this->makeRunner();
+
+        $changes = $this->invoke(
+            $runner,
+            'detectCapabilityChanges',
+            [
+                'acme/skipped' => [
+                    '1.0.0' => [],
+                    '2.0.0' => ['system'],
+                ],
+                'acme/reported' => [
+                    '1.0.0' => [],
+                    '2.0.0' => ['eval'],
+                ],
+            ],
+            [
+                'acme/reported' => ['2.0.0'],
+            ],
+        );
+
+        self::assertSame([
+            [
+                'package' => 'acme/reported',
+                'version' => '2.0.0',
+                'previousVersion' => '1.0.0',
+                'capability' => 'eval',
+            ],
+        ], $changes);
+    }
+
+    public function testDetectCapabilityChangesSkipsOldVersionChangesButKeepsNewerOnes(): void
+    {
+        // 1.5.0 introduced eval, but only 2.0.0 is newly audited — the 1.5.0 change is skipped and
+        // 2.0.0's new capability is still reported (the inner skip must continue, not break).
+        $runner = $this->makeRunner();
+
+        $changes = $this->invoke(
+            $runner,
+            'detectCapabilityChanges',
+            [
+                'acme/widget' => [
+                    '1.0.0' => [],
+                    '1.5.0' => ['eval'],
+                    '2.0.0' => ['eval', 'system'],
+                ],
+            ],
+            [
+                'acme/widget' => ['2.0.0'],
+            ],
+        );
+
+        self::assertSame([
+            [
+                'package' => 'acme/widget',
+                'version' => '2.0.0',
+                'previousVersion' => '1.5.0',
+                'capability' => 'system',
+            ],
+        ], $changes);
     }
 
     // ---------------------------------------------------------------------
@@ -233,6 +446,31 @@ final class BuildRunnerTest extends TestCase
         // An unparsable constraint string throws inside Composer's parser; the method
         // swallows it and conservatively keeps the package.
         self::assertTrue($this->invoke($runner, 'versionMatchesConstraint', $package, 'this is not a constraint'));
+    }
+
+    /**
+     * Path/VCS repositories expose untagged packages as a dev/branch version (e.g. "dev-master"
+     * or "9999999-dev"), which carries no comparable semver. A numeric constraint like "^8.1"
+     * can never match such a version, yet dropping it would silently exclude every local package
+     * from the mirror — so dev-stability versions are always kept regardless of the constraint.
+     */
+    public function testVersionMatchesConstraintKeepsBranchDevVersionAgainstNumericConstraint(): void
+    {
+        $runner = $this->makeRunner();
+        $package = $this->package('vendor/pkg', 'dev-master');
+
+        self::assertTrue($package->isDev());
+        self::assertTrue($this->invoke($runner, 'versionMatchesConstraint', $package, '^8.1'));
+    }
+
+    public function testVersionMatchesConstraintKeepsNumericDevVersionAgainstNumericConstraint(): void
+    {
+        $runner = $this->makeRunner();
+        // A non-branch dev version (e.g. an unbounded "9999999-dev" default) is still dev-stability.
+        $package = $this->package('vendor/pkg', '9999999-dev');
+
+        self::assertTrue($package->isDev());
+        self::assertTrue($this->invoke($runner, 'versionMatchesConstraint', $package, '^2.0'));
     }
 
     // ---------------------------------------------------------------------
@@ -472,6 +710,25 @@ final class BuildRunnerTest extends TestCase
         self::assertNull($dist['shasum']);
     }
 
+    /**
+     * End-to-end of the slash fix: a package whose version contains '/' (a branch-derived
+     * "dev-fix/foo") serialises to a slash-free dist URL, matching the on-disk archive name.
+     */
+    public function testPackageToArrayDistUrlIsSlashFreeForBranchVersion(): void
+    {
+        $runner = $this->makeRunner($this->config([
+            'homepage' => 'https://repo.example.com',
+        ]));
+        $package = $this->package('acme/widget', 'dev-fix/foo');
+        $package->setDistType('zip');
+        $this->setResolved($runner, [$package]);
+
+        $data = $this->asListOfDict($this->invoke($runner, 'serializePackages', $this->tmp))[0];
+        $dist = $this->asDict($data['dist']);
+
+        self::assertSame('https://repo.example.com/dist/acme-widget-dev-fix-foo.zip', $dist['url']);
+    }
+
     public function testPackageToArrayComputesDistShasumFromArchiveOnDisk(): void
     {
         $runner = $this->makeRunner($this->config([
@@ -490,8 +747,9 @@ final class BuildRunnerTest extends TestCase
         $dist = $this->asDict($data['dist']);
 
         self::assertSame('https://repo.example.com/dist/acme-widget-1.2.3.zip', $dist['url']);
-        // The shasum is the sha256 of exactly that on-disk archive.
-        self::assertSame(hash_file('sha256', $archivePath), $dist['shasum']);
+        // The shasum is the sha1 of exactly that on-disk archive (Composer verifies dist shasums
+        // as SHA-1, so the mirror must record SHA-1).
+        self::assertSame(hash_file('sha1', $archivePath), $dist['shasum']);
     }
 
     public function testPackageToArrayIncludesSourceBlockWhenSourceTypeSet(): void
@@ -732,7 +990,7 @@ final class BuildRunnerTest extends TestCase
 
     private function makeRunner(?SatisConfig $config = null): BuildRunner
     {
-        return new BuildRunner($config ?? $this->config(), $this->tmp, false, false);
+        return new BuildRunner($config ?? $this->config(), $this->tmp, false, false, true);
     }
 
     private function package(string $name, string $prettyVersion): CompletePackage

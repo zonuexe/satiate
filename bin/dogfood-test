@@ -2,9 +2,22 @@
 set -euo pipefail
 
 # Satiate end-to-end dogfooding test
-# 1. Build a repository from local packages
-# 2. Serve via HTTP
-# 3. Install packages from the served repository
+#
+# Proves satiate produces a *working* static Composer repository:
+#   1. Build a mirror from the locally installed packages (path repositories).
+#   2. Assert every required package — including ones the resolver used to drop — is present.
+#   3. Serve it over HTTP and install packages straight from the mirror with Packagist
+#      DISABLED, so a broken mirror (a dropped package, a bad dist checksum) fails the test
+#      instead of silently falling back to packagist.org.
+#
+# Versioning note: a `path` repository over an installed vendor tree has no release tags, so
+# Composer derives a dev version from the enclosing checkout — "dev-master" on a named branch, but
+# "dev-<commit-sha>" on a detached HEAD (e.g. GitHub Actions PR builds). Either way it is a dev
+# version with no comparable semver, so the mirror-only installs below all use "@dev" (which matches
+# any dev version) rather than caret constraints, which would only resolve via a branch-alias that
+# happens to match the guessed branch name. Packages with many caret-constrained dependencies
+# (symfony/console, phpunit/phpunit) cannot install from such a mirror in isolation — their
+# transitive deps are dev versions too — so they are only asserted to be present, not installed.
 
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SATIATE_BIN="$PROJECT_ROOT/bin/satiate"
@@ -12,7 +25,7 @@ OUTDIR=$(mktemp -d /tmp/satiate-www-XXXX)
 TMPDIR=$(mktemp -d /tmp/satiate-test-XXXX)
 trap 'rm -rf "$OUTDIR" "$TMPDIR"; kill $(lsof -ti:8888) 2>/dev/null || true' EXIT
 
-echo "=== 1. Building repository with all vendor-bin sources ==="
+echo "=== 1. Building repository from locally installed packages ==="
 
 # Include all package sources: root vendor + each vendor-bin
 cat > "$TMPDIR/satis.json" << SATIS
@@ -29,8 +42,8 @@ cat > "$TMPDIR/satis.json" << SATIS
         "symfony/console": "^8.1",
         "nikic/php-parser": "^5.7",
         "phpunit/phpunit": "^13.2",
-        "php-http/discovery": "^1.19",
-        "phpstan/phpstan": "^2.2"
+        "phpstan/phpstan": "^2.2",
+        "psr/log": "^3.0"
     },
     "require-all": false,
     "require-dependencies": true,
@@ -46,89 +59,86 @@ SATIS
 "$SATIATE_BIN" build -c "$TMPDIR/satis.json" --output-dir "$OUTDIR" --no-audit 2>&1
 
 echo ""
-echo "=== 2. Packages available ==="
+echo "=== 2. Packages available in the mirror ==="
 python3 -c "
 import json
 d = json.load(open('$OUTDIR/packages.json'))
 pkgs = d.get('packages', {})
 if isinstance(pkgs, dict):
     for name, versions in sorted(pkgs.items()):
-        vlist = sorted(versions.keys(), key=str)
-        print(f'  ✅ {name}: {len(vlist)} version(s)')
+        print(f'  ✅ {name}: {sorted(versions.keys(), key=str)}')
+    print(f'  TOTAL: {len(pkgs)} packages')
 else:
     print(f'  ⚠️ packages is {type(pkgs).__name__} ({len(pkgs)} entries)')
 "
 
 echo ""
-echo "=== 3. Starting HTTP server on localhost:8888 ==="
+echo "=== 3. Asserting required packages were not dropped from the mirror ==="
+# Regression guard: path-repo dev versions (dev-master) used to be filtered out by their caret
+# constraint, leaving the mirror nearly empty. Every required package must survive into the mirror.
+python3 -c "
+import json, sys
+d = json.load(open('$OUTDIR/packages.json'))
+have = set(d.get('packages', {}).keys())
+required = ['symfony/console', 'nikic/php-parser', 'phpunit/phpunit', 'phpstan/phpstan', 'psr/log']
+missing = [p for p in required if p not in have]
+if missing:
+    print('  ❌ MISSING from mirror:', missing)
+    sys.exit(1)
+print('  ✅ all required packages present:', required)
+"
+
+echo ""
+echo "=== 4. Starting HTTP server on localhost:8888 ==="
 php -S localhost:8888 -t "$OUTDIR" &>/tmp/satiate-server.log &
 sleep 1
 curl -s http://localhost:8888/packages.json | python3 -c "import json,sys; d=json.load(sys.stdin); print('Server OK —', len(d.get('available-packages',[])), 'packages available')"
 
-echo ""
-echo "=== 4. Installing php-http-discover ==="
-
-mkdir -p "$TMPDIR/test-discovery"
-cat > "$TMPDIR/test-discovery/composer.json" << 'EOF'
+# install_from_mirror <package> <constraint> <slug>
+# Installs a single package straight from the satiate mirror with Packagist DISABLED. A dropped
+# package or a dist checksum that Composer rejects makes `composer install` fail, which (under
+# `set -e` + `pipefail`) aborts the whole script — so this genuinely exercises the mirror.
+install_from_mirror () {
+    pkg="$1"; constraint="$2"; slug="$3"; dir="$TMPDIR/install-$slug"
+    mkdir -p "$dir"
+    cat > "$dir/composer.json" << EOF
 {
-    "name": "satiate/test-discovery",
-    "repositories": [{"type": "composer", "url": "http://localhost:8888"}],
-    "require": {"php-http/discovery": "^1.19"},
+    "name": "satiate/install-$slug",
+    "version": "1.0.0",
+    "repositories": {
+        "satiate": {"type": "composer", "url": "http://localhost:8888"},
+        "packagist.org": false
+    },
+    "require": {"$pkg": "$constraint"},
+    "minimum-stability": "dev",
     "config": {"secure-http": false}
 }
 EOF
-cd "$TMPDIR/test-discovery" && composer install --no-interaction 2>&1 | tail -5
-echo ""
-echo "php-http/discovery installed: $(ls -d vendor/php-http/discovery 2>/dev/null || echo 'MISSING!')"
-
-echo ""
-echo "=== 5. Installing Symfony Console (with deps) ==="
-
-mkdir -p "$TMPDIR/test-console"
-cat > "$TMPDIR/test-console/composer.json" << 'EOF'
-{
-    "name": "satiate/test-console",
-    "repositories": [{"type": "composer", "url": "http://localhost:8888"}],
-    "require": {"symfony/console": "^8.1"},
-    "config": {"secure-http": false}
+    ( cd "$dir" && composer install --no-interaction 2>&1 | tail -4 )
+    if [ ! -d "$dir/vendor/$pkg" ]; then
+        echo "  ❌ $pkg NOT installed from mirror"
+        exit 1
+    fi
+    echo "  ✅ $pkg installed from the mirror (packagist disabled)"
 }
-EOF
-cd "$TMPDIR/test-console" && composer install --no-interaction 2>&1 | tail -5
-echo "symfony/console: $(ls -d vendor/symfony/console 2>/dev/null || echo 'MISSING!')"
 
 echo ""
-echo "=== 6. Installing PHPStan (from phpstan vendor-bin) ==="
-
-mkdir -p "$TMPDIR/test-phpstan"
-cat > "$TMPDIR/test-phpstan/composer.json" << 'EOF'
-{
-    "name": "satiate/test-phpstan",
-    "repositories": [{"type": "composer", "url": "http://localhost:8888"}],
-    "require": {"phpstan/phpstan": "^2.2"},
-    "config": {"secure-http": false}
-}
-EOF
-cd "$TMPDIR/test-phpstan" && composer install --no-interaction 2>&1 | tail -5
-echo "phpstan/phpstan: $(ls -d vendor/phpstan/phpstan 2>/dev/null || echo 'MISSING!')"
+echo "=== 5. Installing nikic/php-parser from the mirror (@dev) ==="
+install_from_mirror "nikic/php-parser" "@dev" "php-parser"
 
 echo ""
-echo "=== 7. Installing PHPUnit (from phpunit vendor-bin) ==="
-
-mkdir -p "$TMPDIR/test-phpunit"
-cat > "$TMPDIR/test-phpunit/composer.json" << 'EOF'
-{
-    "name": "satiate/test-phpunit",
-    "repositories": [{"type": "composer", "url": "http://localhost:8888"}],
-    "require": {"phpunit/phpunit": "^13.2"},
-    "config": {"secure-http": false}
-}
-EOF
-cd "$TMPDIR/test-phpunit" && composer install --no-interaction 2>&1 | tail -5
-echo "phpunit/phpunit: $(ls -d vendor/phpunit/phpunit 2>/dev/null || echo 'MISSING!')"
+echo "=== 6. Installing psr/log from the mirror (@dev) ==="
+install_from_mirror "psr/log" "@dev" "psr-log"
 
 echo ""
-echo "=== 8. Audit the repository ==="
-"$SATIATE_BIN" audit --path "$OUTDIR" 2>&1 | tail -5
+echo "=== 7. Installing phpstan/phpstan from the mirror (leaf package, @dev) ==="
+install_from_mirror "phpstan/phpstan" "@dev" "phpstan"
+
+echo ""
+echo "=== 8. Audit the repository (listing critical findings, summarising the rest) ==="
+# A mirror of real libraries trips many benign warnings (dynamic includes, exec, ...), so list
+# only critical findings individually and let the summary report the per-severity counts.
+"$SATIATE_BIN" audit --path "$OUTDIR" --min-severity critical 2>&1 | tail -8
 
 echo ""
 echo "=== Dogfooding test complete ==="

@@ -14,6 +14,10 @@ use Composer\Repository\PlatformRepository;
 use Composer\Repository\RepositorySet;
 use Psl\Type;
 use Satiate\Audit\Auditor;
+use Satiate\Audit\AuditResult;
+use Satiate\Audit\AuditSummary;
+use Satiate\Audit\Severity;
+use Satiate\Audit\VersionCapabilityDiff;
 use Satiate\Config\SatisConfig;
 
 final class BuildRunner
@@ -23,14 +27,24 @@ final class BuildRunner
      */
     private array $resolvedPackages = [];
 
+    public AuditSummary $lastAuditSummary;
+
+    /**
+     * Capabilities a newly-audited version gained relative to the version before it.
+     *
+     * @var list<array{package: string, version: string, previousVersion: string, capability: string}>
+     */
+    public array $lastCapabilityChanges = [];
+
     public function __construct(
         private readonly SatisConfig $config,
         private readonly string $outputDir,
         private readonly bool $includeDev,
         private readonly bool $runAudit,
-    ) {}
-
-    public int $lastAuditFindings = 0;
+        private readonly bool $useAuditCache,
+    ) {
+        $this->lastAuditSummary = new AuditSummary();
+    }
 
     public function run(): int
     {
@@ -64,31 +78,43 @@ final class BuildRunner
     private function auditStep(string $outputDir): void
     {
         $cacheDir = $outputDir . '/.satiate-cache';
-
-        if (! is_dir($cacheDir)) {
-            if (! mkdir($cacheDir, 0755, true) && ! is_dir($cacheDir)) {
-                throw new \RuntimeException(\sprintf('Failed to create cache directory: %s', $cacheDir));
-            }
-        }
-
         $auditedPath = $cacheDir . '/audited-versions.json';
+        $fingerprintsPath = $cacheDir . '/capability-fingerprints.json';
         $audited = [];
 
-        if (is_file($auditedPath)) {
-            $content = file_get_contents($auditedPath);
+        /** @var array<string, array<string, list<string>>> $fingerprints */
+        $fingerprints = [];
 
-            if ($content !== false) {
-                $decoded = json_decode($content, true);
-
-                if (is_array($decoded)) {
-                    $audited = $decoded;
+        // With the cache disabled, every resolved package is audited every run (and nothing is
+        // persisted) — the deterministic behaviour you want when gating CI on `--fail-on`.
+        if ($this->useAuditCache) {
+            if (! is_dir($cacheDir)) {
+                if (! mkdir($cacheDir, 0755, true) && ! is_dir($cacheDir)) {
+                    throw new \RuntimeException(\sprintf('Failed to create cache directory: %s', $cacheDir));
                 }
             }
+
+            if (is_file($auditedPath)) {
+                $content = file_get_contents($auditedPath);
+
+                if ($content !== false) {
+                    $decoded = json_decode($content, true);
+
+                    if (is_array($decoded)) {
+                        $audited = $decoded;
+                    }
+                }
+            }
+
+            $fingerprints = $this->loadFingerprints($fingerprintsPath);
         }
 
         $auditor = new Auditor();
-        $totalFindings = 0;
+        $summary = new AuditSummary();
         $newlyAudited = [];
+
+        /** @var array<string, list<string>> $newVersions */
+        $newVersions = [];
 
         foreach ($this->resolvedPackages as $package) {
             $packageName = $package->getPrettyName();
@@ -101,51 +127,23 @@ final class BuildRunner
             }
 
             $distDir = $outputDir . '/' . $this->archiveDirName();
-            $archiveFilename = \sprintf(
-                '%s-%s.%s',
-                str_replace('/', '-', $packageName),
-                $version,
-                $this->archiveFormatName(),
-            );
-            $archivePath = $distDir . '/' . $archiveFilename;
+            $archivePath = $distDir . '/' . $this->archiveFileName($packageName, $version);
 
             if (! is_file($archivePath)) {
                 continue;
             }
 
-            $tmpDir = $cacheDir . '/extract_' . bin2hex(random_bytes(4));
-
-            if (! mkdir($tmpDir, 0755, true) && ! is_dir($tmpDir)) {
-                continue;
-            }
-
-            $zip = new \ZipArchive();
-
-            if ($zip->open($archivePath) === true) {
-                $zip->extractTo($tmpDir);
-                $zip->close();
-
-                $finder = new \RecursiveIteratorIterator(
-                    new \RecursiveDirectoryIterator($tmpDir, \RecursiveDirectoryIterator::SKIP_DOTS),
-                );
-
-                foreach ($finder as $file) {
-                    assert($file instanceof \SplFileInfo);
-
-                    if ($file->isFile() && $file->getExtension() === 'php') {
-                        $results = $auditor->auditFile($packageName, $version, $file->getPathname());
-
-                        $totalFindings += \count($results);
-                    }
-                }
-
-                $this->rmdir($tmpDir);
-            }
+            $results = $auditor->auditArchive($packageName, $version, $archivePath);
+            $summary->addAll($results);
+            $fingerprints[$packageName][$version] = $this->capabilityFingerprint($results);
+            $newVersions[$packageName][] = $version;
 
             $newlyAudited[] = $packageKey;
         }
 
-        if ($newlyAudited !== []) {
+        $this->lastCapabilityChanges = $this->detectCapabilityChanges($fingerprints, $newVersions);
+
+        if ($this->useAuditCache && $newlyAudited !== []) {
             foreach ($newlyAudited as $key) {
                 $audited[$key] = [
                     'audited_at' => date('c'),
@@ -153,31 +151,93 @@ final class BuildRunner
             }
 
             file_put_contents($auditedPath, json_encode($audited, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+            file_put_contents($fingerprintsPath, json_encode($fingerprints, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
         }
 
-        $this->lastAuditFindings = $totalFindings;
+        $this->lastAuditSummary = $summary;
     }
 
-    private function rmdir(string $path): void
+    /**
+     * @return array<string, array<string, list<string>>>
+     */
+    private function loadFingerprints(string $path): array
     {
-        $iterator = new \RecursiveIteratorIterator(
-            new \RecursiveDirectoryIterator($path, \RecursiveDirectoryIterator::SKIP_DOTS),
-            \RecursiveIteratorIterator::CHILD_FIRST,
-        );
+        if (! is_file($path)) {
+            return [];
+        }
 
-        foreach ($iterator as $item) {
-            if (! $item instanceof \SplFileInfo) {
+        $content = file_get_contents($path);
+
+        if ($content === false) {
+            return [];
+        }
+
+        try {
+            return Type\dict(Type\string(), Type\dict(Type\string(), Type\vec(Type\string())))
+                ->coerce(json_decode($content, true));
+        } catch (\Throwable) {
+            return [];
+        }
+    }
+
+    /**
+     * Distinct Warning-or-worse finding patterns — the "capability fingerprint" of a version that
+     * the cross-version diff compares. Info-level noise (assert, autoload.files, PSR-1, …) is
+     * excluded so only security-relevant capability changes are tracked.
+     *
+     * @param list<AuditResult> $results
+     * @return list<string>
+     */
+    private function capabilityFingerprint(array $results): array
+    {
+        $patterns = [];
+
+        foreach ($results as $result) {
+            if ($result->severity->rank() >= Severity::Warning->rank()) {
+                $patterns[] = $result->pattern;
+            }
+        }
+
+        return array_values(array_unique($patterns));
+    }
+
+    /**
+     * Diff each package's versions and report capabilities a version audited THIS run introduced
+     * relative to its predecessor — only for newly-audited versions, so an unchanged cached package
+     * does not re-report its history every build. This is advisory (reported, never gates the
+     * build): legitimate updates add capabilities too, so it is a review signal, not a finding.
+     *
+     * @param array<string, array<string, list<string>>> $fingerprints
+     * @param array<string, list<string>> $newVersions
+     * @return list<array{package: string, version: string, previousVersion: string, capability: string}>
+     */
+    private function detectCapabilityChanges(array $fingerprints, array $newVersions): array
+    {
+        $diff = new VersionCapabilityDiff();
+        $changes = [];
+
+        foreach ($fingerprints as $packageName => $versionMap) {
+            $auditedVersions = $newVersions[$packageName] ?? [];
+
+            if ($auditedVersions === []) {
                 continue;
             }
 
-            if ($item->isDir()) {
-                rmdir($item->getPathname());
-            } else {
-                unlink($item->getPathname());
+            foreach ($diff->introduced($versionMap) as $change) {
+                if (! \in_array($change['version'], $auditedVersions, true)) {
+                    continue;
+                }
+
+                $changes[] = [
+                    'package' => $packageName,
+                    'version' => $change['version'],
+                    'previousVersion' => $change['previousVersion'],
+                    'capability' => $change['capability'],
+                ];
             }
         }
 
-        rmdir($path);
+        return $changes;
     }
 
     private function resolvePackages(): void
@@ -301,6 +361,16 @@ final class BuildRunner
 
     private function versionMatchesConstraint(CompletePackageInterface $package, string $constraintStr): bool
     {
+        // Dev/branch versions (e.g. "dev-master", "9999999-dev") come from path or VCS
+        // repositories that expose no release tag. Composer derives them from the enclosing
+        // branch, so they carry no comparable semver and a numeric constraint like "^8.1" can
+        // never match them. Dropping them would silently exclude every untagged local package
+        // from the mirror, so keep them: the mirror should carry whatever the source provides
+        // and let the consuming project decide via its own (dev) constraints.
+        if ($package->isDev()) {
+            return true;
+        }
+
         try {
             $versionParser = new \Composer\Semver\VersionParser();
 
@@ -431,13 +501,7 @@ final class BuildRunner
         foreach ($this->resolvedPackages as $package) {
             $packageName = $package->getPrettyName();
 
-            $expectedFilename = \sprintf(
-                '%s-%s.%s',
-                str_replace('/', '-', $packageName),
-                $package->getPrettyVersion(),
-                $archiveFormat,
-            );
-            $expectedPath = $distDir . '/' . $expectedFilename;
+            $expectedPath = $distDir . '/' . $this->archiveFileName($packageName, $package->getPrettyVersion());
 
             if (is_file($expectedPath)) {
                 continue;
@@ -483,18 +547,13 @@ final class BuildRunner
         $dist = null;
 
         if ($package->getDistType() !== null) {
-            $archiveFilename = \sprintf(
-                '%s-%s.%s',
-                str_replace('/', '-', $package->getPrettyName()),
-                $package->getPrettyVersion(),
-                $this->archiveFormatName(),
-            );
+            $archiveFilename = $this->archiveFileName($package->getPrettyName(), $package->getPrettyVersion());
 
             $dist = [
                 'type' => $this->archiveFormatName(),
                 'url' => $this->archiveUrlForPackage($outputDir, $archiveFilename),
                 'reference' => $package->getDistReference(),
-                'shasum' => $this->computeSha256($outputDir . '/' . $this->archiveDirName() . '/' . $archiveFilename),
+                'shasum' => $this->computeDistShasum($outputDir . '/' . $this->archiveDirName() . '/' . $archiveFilename),
             ];
         }
 
@@ -554,13 +613,45 @@ final class BuildRunner
         return ($this->config->archive ?? [])['format'] ?? 'zip';
     }
 
-    private function computeSha256(string $path): ?string
+    /**
+     * Build the on-disk / URL filename for a package's distribution archive. The name and version
+     * are both slugified so nothing in them can escape the filename (see slugForFilename()).
+     */
+    private function archiveFileName(string $packageName, string $version): string
+    {
+        return \sprintf(
+            '%s-%s.%s',
+            $this->slugForFilename($packageName),
+            $this->slugForFilename($version),
+            $this->archiveFormatName(),
+        );
+    }
+
+    /**
+     * Flatten any run of characters that are not filename/URL-safe to a single '-'.
+     *
+     * A package name always contains a '/', and a path/VCS package built on a branch (e.g.
+     * "fix/foo") gets a version like "dev-fix/foo"; left in the filename, a '/' would escape into a
+     * subdirectory and a '/', '\\', space or other unsafe character would break the dist URL. Only
+     * [A-Za-z0-9._-] is kept — enough for every package name and normalised version satiate emits.
+     */
+    private function slugForFilename(string $value): string
+    {
+        $slug = preg_replace('/[^A-Za-z0-9._-]+/', '-', $value);
+
+        return $slug ?? $value;
+    }
+
+    private function computeDistShasum(string $path): ?string
     {
         if (! is_file($path)) {
             return null;
         }
 
-        $hash = hash_file('sha256', $path);
+        // Composer verifies a dist's `shasum` field with hash_file('sha1', ...) — see
+        // Composer\Downloader\FileDownloader — so it MUST be a SHA-1 digest. Emitting a SHA-256
+        // here makes every download from the mirror fail "checksum verification of the file".
+        $hash = hash_file('sha1', $path);
 
         return $hash !== false ? $hash : null;
     }

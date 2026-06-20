@@ -8,6 +8,13 @@ use Psl\Type;
 
 final class ConfigLoader
 {
+    /**
+     * Archive formats `satiate build` can emit (the formats Composer's archiver supports).
+     *
+     * @var list<string>
+     */
+    private const SUPPORTED_ARCHIVE_FORMATS = ['zip', 'tar', 'tar.gz', 'tar.bz2'];
+
     public static function load(string $path): SatisConfig
     {
         $realPath = realpath($path);
@@ -86,6 +93,15 @@ final class ConfigLoader
             && isset($decoded['archive']['directory'], $decoded['archive']['format'])
         ) {
             $archive = $archiveType->coerce($decoded['archive']);
+
+            if (! in_array($archive['format'], self::SUPPORTED_ARCHIVE_FORMATS, true)) {
+                throw new \RuntimeException(\sprintf(
+                    'Unsupported archive format "%s" in %s; expected one of: %s',
+                    $archive['format'],
+                    $path,
+                    implode(', ', self::SUPPORTED_ARCHIVE_FORMATS),
+                ));
+            }
         }
 
         return new SatisConfig(

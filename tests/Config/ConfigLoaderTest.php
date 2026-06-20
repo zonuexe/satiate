@@ -213,4 +213,66 @@ final class ConfigLoaderTest extends TestCase
         self::assertSame('composer', $config->repositories[1]['type']);
         self::assertSame('https://github.com/org/valid-repo-2', $config->repositories[1]['url']);
     }
+
+    /**
+     * Every archive format Composer's archiver can emit must load without error.
+     */
+    public function testLoadAcceptsEverySupportedArchiveFormat(): void
+    {
+        foreach (['zip', 'tar', 'tar.gz', 'tar.bz2'] as $format) {
+            $path = $this->writeTempConfig([
+                'name' => 'R',
+                'homepage' => 'https://example.com',
+                'archive' => [
+                    'directory' => 'dist',
+                    'format' => $format,
+                ],
+            ]);
+
+            try {
+                $config = ConfigLoader::load($path);
+            } finally {
+                unlink($path);
+            }
+
+            self::assertNotNull($config->archive);
+            self::assertSame($format, $config->archive['format']);
+        }
+    }
+
+    /**
+     * An unsupported archive.format is rejected at load time with a clear error, instead of
+     * surfacing later as an opaque archiver failure during the build.
+     */
+    public function testLoadRejectsUnsupportedArchiveFormat(): void
+    {
+        $path = $this->writeTempConfig([
+            'name' => 'R',
+            'homepage' => 'https://example.com',
+            'archive' => [
+                'directory' => 'dist',
+                'format' => 'rar',
+            ],
+        ]);
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Unsupported archive format "rar"');
+
+        try {
+            ConfigLoader::load($path);
+        } finally {
+            unlink($path);
+        }
+    }
+
+    /**
+     * @param array<string, mixed> $data
+     */
+    private function writeTempConfig(array $data): string
+    {
+        $path = (string) tempnam(sys_get_temp_dir(), 'satis_config_');
+        file_put_contents($path, (string) json_encode($data));
+
+        return $path;
+    }
 }
