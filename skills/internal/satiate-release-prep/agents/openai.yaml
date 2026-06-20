@@ -1,0 +1,4 @@
+interface:
+  display_name: "Satiate Release Prep"
+  short_description: "Prepare and publish a Satiate release: version bump, changelog, tag, GitHub release."
+  default_prompt: "Prepare the next Satiate release by bumping the version constant, updating CHANGELOG.md, running the verification gates, then committing, tagging, and creating the GitHub release."
