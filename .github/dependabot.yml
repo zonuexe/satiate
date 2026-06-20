@@ -1,0 +1,22 @@
+version: 2
+updates:
+  # Root package + every bamarni bin tool (.vendor-bin/*), batched into one PR per run.
+  - package-ecosystem: composer
+    directories:
+      - "/"
+      - "/.vendor-bin/*"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      composer:
+        patterns: ["*"]
+
+  # Keeps the workflow/composite actions current (also resolves Node runtime deprecations).
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
