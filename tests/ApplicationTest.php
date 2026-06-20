@@ -46,7 +46,7 @@ final class ApplicationTest extends TestCase
         $application = new Application();
 
         self::assertSame('Satiate', $application->getName());
-        self::assertSame('0.1.0-dev', $application->getVersion());
+        self::assertSame('0.0.1', $application->getVersion());
     }
 
     public function testAllCommandsAreRegistered(): void
