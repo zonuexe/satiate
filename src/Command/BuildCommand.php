@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Satiate\Command;
 
+use Satiate\Audit\Severity;
 use Satiate\Build\BuildRunner;
 use Satiate\Config\ConfigLoader;
 use Symfony\Component\Console\Command\Command;
@@ -25,7 +26,9 @@ final class BuildCommand extends Command
         $this->addOption('config', 'c', InputOption::VALUE_REQUIRED, 'Path to satis.json', 'satis.json');
         $this->addOption('output-dir', null, InputOption::VALUE_REQUIRED, 'Output directory', 'output');
         $this->addOption('no-audit', null, InputOption::VALUE_NONE, 'Skip audit step');
+        $this->addOption('no-audit-cache', null, InputOption::VALUE_NONE, 'Audit every package every run instead of skipping versions recorded in .satiate-cache');
         $this->addOption('include-dev', null, InputOption::VALUE_NONE, 'Include dev dependencies');
+        $this->addOption('fail-on', null, InputOption::VALUE_REQUIRED, 'Exit non-zero if the audit finds an issue at or above this severity (info, warning, critical)');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
@@ -55,6 +58,24 @@ final class BuildCommand extends Command
 
         $includeDev = $input->getOption('include-dev') === true;
         $runAudit = $input->getOption('no-audit') !== true;
+        $useAuditCache = $input->getOption('no-audit-cache') !== true;
+
+        // --fail-on is optional: when unset, audit findings never change the exit code.
+        $failOnInput = $input->getOption('fail-on');
+        $failOn = null;
+
+        if (\is_string($failOnInput) && $failOnInput !== '') {
+            $failOn = Severity::tryFrom(strtolower($failOnInput));
+
+            if ($failOn === null) {
+                $output->writeln(\sprintf(
+                    '<error>Invalid --fail-on "%s"; expected one of: info, warning, critical</error>',
+                    $failOnInput,
+                ));
+
+                return self::FAILURE;
+            }
+        }
 
         $output->writeln(\sprintf('Building repository: <info>%s</info>', $config->name));
         $output->writeln(\sprintf('Output directory: <info>%s</info>', $outputDir));
@@ -67,6 +88,7 @@ final class BuildCommand extends Command
             outputDir: $outputDir,
             includeDev: $includeDev,
             runAudit: $runAudit,
+            useAuditCache: $useAuditCache,
         );
 
         try {
@@ -77,8 +99,40 @@ final class BuildCommand extends Command
             return self::FAILURE;
         }
 
-        if ($runner->lastAuditFindings > 0) {
-            $output->writeln(\sprintf('<comment>Audit: %d suspicious pattern(s) found.</comment>', $runner->lastAuditFindings));
+        $summary = $runner->lastAuditSummary;
+
+        if ($summary->total() > 0) {
+            $output->writeln(\sprintf(
+                '<comment>Audit: %d suspicious pattern(s) found (%d critical, %d warning, %d info).</comment>',
+                $summary->total(),
+                $summary->count(Severity::Critical),
+                $summary->count(Severity::Warning),
+                $summary->count(Severity::Info),
+            ));
+        }
+
+        if ($runner->lastCapabilityChanges !== []) {
+            $output->writeln('<comment>Capability changes (a new version gained a capability the previous one lacked):</comment>');
+
+            foreach ($runner->lastCapabilityChanges as $change) {
+                $output->writeln(\sprintf(
+                    '  <comment>%s %s introduces "%s" (not in %s)</comment>',
+                    $change['package'],
+                    $change['version'],
+                    $change['capability'],
+                    $change['previousVersion'],
+                ));
+            }
+        }
+
+        if ($failOn !== null && $summary->countAtOrAbove($failOn) > 0) {
+            $output->writeln(\sprintf(
+                '<error>Audit gate failed: %d finding(s) at or above "%s".</error>',
+                $summary->countAtOrAbove($failOn),
+                $failOn->value,
+            ));
+
+            return self::FAILURE;
         }
 
         if ($result === 0) {

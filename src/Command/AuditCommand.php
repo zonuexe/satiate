@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Satiate\Command;
 
 use Satiate\Audit\Auditor;
+use Satiate\Audit\AuditSummary;
 use Satiate\Audit\Severity;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
@@ -25,6 +26,8 @@ final class AuditCommand extends Command
         $this->addOption('config', 'c', InputOption::VALUE_REQUIRED, 'Path to satis.json', 'satis.json');
         $this->addOption('path', null, InputOption::VALUE_REQUIRED, 'Path to package source to audit');
         $this->addOption('cache-path', null, InputOption::VALUE_REQUIRED, 'Path to .satiate-cache for change-diff auditing');
+        $this->addOption('min-severity', null, InputOption::VALUE_REQUIRED, 'Only list findings at or above this severity (info, warning, critical)', Severity::Info->value);
+        $this->addOption('fail-on', null, InputOption::VALUE_REQUIRED, 'Exit non-zero if any finding is at or above this severity (info, warning, critical)');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
@@ -44,6 +47,35 @@ final class AuditCommand extends Command
             return self::FAILURE;
         }
 
+        $minSeverityInput = $input->getOption('min-severity');
+        $minSeverity = \is_string($minSeverityInput) ? Severity::tryFrom(strtolower($minSeverityInput)) : null;
+
+        if ($minSeverity === null) {
+            $output->writeln(\sprintf(
+                '<error>Invalid --min-severity "%s"; expected one of: info, warning, critical</error>',
+                \is_string($minSeverityInput) ? $minSeverityInput : '',
+            ));
+
+            return self::FAILURE;
+        }
+
+        // --fail-on is optional (no default): when unset, findings never change the exit code.
+        $failOnInput = $input->getOption('fail-on');
+        $failOn = null;
+
+        if (\is_string($failOnInput) && $failOnInput !== '') {
+            $failOn = Severity::tryFrom(strtolower($failOnInput));
+
+            if ($failOn === null) {
+                $output->writeln(\sprintf(
+                    '<error>Invalid --fail-on "%s"; expected one of: info, warning, critical</error>',
+                    $failOnInput,
+                ));
+
+                return self::FAILURE;
+            }
+        }
+
         $auditedFiles = [];
 
         if (\is_string($cachePath) && $cachePath !== '' && is_file($cachePath . '/audited-files.json')) {
@@ -59,8 +91,9 @@ final class AuditCommand extends Command
         }
 
         $auditor = new Auditor();
-        $totalResults = 0;
-        $files = $this->phpFilesIn($path);
+        $summary = new AuditSummary();
+        $shownResults = 0;
+        $files = $this->auditTargetsIn($path);
         $newlyAudited = [];
 
         if ($files === []) {
@@ -76,9 +109,25 @@ final class AuditCommand extends Command
                 continue;
             }
 
-            $results = $auditor->auditFile('', '', $file);
+            // A built mirror stores package code as zip/tar archives under dist/, so audit inside
+            // them; a plain source tree is audited file by file (composer.json included).
+            if (str_ends_with($file, '.php')) {
+                $results = $auditor->auditFile('', '', $file);
+            } elseif (basename($file) === 'composer.json') {
+                $results = $auditor->auditComposerJson('', '', $file);
+            } else {
+                $results = $auditor->auditArchive('', '', $file);
+            }
 
             foreach ($results as $result) {
+                $summary->add($result);
+
+                // Every finding is counted for the summary, but only those at or above the
+                // requested threshold are listed individually.
+                if ($result->severity->rank() < $minSeverity->rank()) {
+                    continue;
+                }
+
                 $tag = match ($result->severity) {
                     Severity::Critical => 'error',
                     Severity::Warning => 'comment',
@@ -95,7 +144,7 @@ final class AuditCommand extends Command
                     $result->description,
                 ));
 
-                $totalResults++;
+                $shownResults++;
             }
 
             $newlyAudited[$file] = $mtime;
@@ -110,21 +159,52 @@ final class AuditCommand extends Command
             file_put_contents($cachePath . '/audited-files.json', json_encode($merged, JSON_PRETTY_PRINT));
         }
 
-        if ($totalResults === 0) {
+        if ($summary->total() === 0) {
             $output->writeln('<info>No suspicious patterns detected.</info>');
 
             return self::SUCCESS;
         }
 
-        $output->writeln(\sprintf("\n<comment>%d issue(s) found.</comment>", $totalResults));
+        $output->writeln(\sprintf(
+            "\n<comment>%d issue(s) found.</comment> (%d critical, %d warning, %d info)",
+            $summary->total(),
+            $summary->count(Severity::Critical),
+            $summary->count(Severity::Warning),
+            $summary->count(Severity::Info),
+        ));
+
+        $hidden = $summary->total() - $shownResults;
+
+        if ($hidden > 0) {
+            $output->writeln(\sprintf(
+                '<info>Showing %d at or above "%s"; %d hidden by --min-severity.</info>',
+                $shownResults,
+                $minSeverity->value,
+                $hidden,
+            ));
+        }
+
+        if ($failOn !== null && $summary->countAtOrAbove($failOn) > 0) {
+            $output->writeln(\sprintf(
+                "\n<error>Audit gate failed: %d finding(s) at or above \"%s\".</error>",
+                $summary->countAtOrAbove($failOn),
+                $failOn->value,
+            ));
+
+            return self::FAILURE;
+        }
 
         return self::SUCCESS;
     }
 
     /**
+     * Collect everything auditable under $path: loose PHP source files, composer.json manifests,
+     * and the distribution archives `satiate build` writes under dist/ (zip, tar, tar.gz, tar.bz2).
+     * Other files — repository JSON metadata, the WebUI — are ignored.
+     *
      * @return list<string>
      */
-    private function phpFilesIn(string $path): array
+    private function auditTargetsIn(string $path): array
     {
         $iterator = new \RecursiveIteratorIterator(
             new \RecursiveDirectoryIterator($path, \RecursiveDirectoryIterator::SKIP_DOTS),
@@ -135,7 +215,9 @@ final class AuditCommand extends Command
         foreach ($iterator as $file) {
             assert($file instanceof \SplFileInfo);
 
-            if ($file->isFile() && $file->getExtension() === 'php') {
+            $name = $file->getFilename();
+
+            if ($file->isFile() && (str_ends_with($name, '.php') || $name === 'composer.json' || Auditor::isSupportedArchive($name))) {
                 $files[] = $file->getPathname();
             }
         }
