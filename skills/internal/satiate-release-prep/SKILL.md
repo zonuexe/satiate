@@ -1,6 +1,11 @@
 ---
 name: satiate-release-prep
-description: Prepare and publish a Satiate release — bump the version constant, update CHANGELOG.md in Keep a Changelog style, run the verification gates, then commit, tag, and create the GitHub release. Use this whenever the user wants to cut, ship, or release a new Satiate version, prepare release notes, bump the version, tag a version like vX.Y.Z, or publish a GitHub release — even if they only describe part of the flow or don't say the word "skill".
+description: |-
+  Use this skill to release a new version of Satiate (the `satiate` PHP CLI). Trigger whenever the user wants to cut, ship, publish, or put out a new version — whether they say it in English or Japanese (リリース, 公開, バージョン切る, タグ打つ, タグ打って, 出したい), and whether they spell out the whole flow or just say "release it," "ship the next version," "あとよろしく," or "手順あったよね、それで進めて." Also trigger for any single step of the release: bumping the version number to vX.Y.Z, writing or moving CHANGELOG entries for a release, tagging a version, or creating the GitHub release.
+
+  The workflow updates the VERSION constant and its test, writes the CHANGELOG (Keep a Changelog style), runs the lint/cs/test verification gates, then commits, tags, and publishes a GitHub release.
+
+  Do NOT trigger for non-release work: fixing a bug in version output, correcting a CHANGELOG typo, adding command features, debugging failing tests, or general questions about semantic versioning.
 ---
 
 # Satiate Release Prep
