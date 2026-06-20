@@ -10,6 +10,7 @@ use Composer\Json\JsonFile;
 use Composer\MetadataMinifier\MetadataMinifier;
 use Composer\Package\CompletePackageInterface;
 use Composer\Repository\ComposerRepository;
+use Composer\Repository\PlatformRepository;
 use Composer\Repository\RepositorySet;
 use Psl\Type;
 use Satiate\Audit\Auditor;
@@ -377,10 +378,10 @@ final class BuildRunner
 
     private function isPlatformPackage(string $packageName): bool
     {
-        return str_starts_with($packageName, 'php')
-            || str_starts_with($packageName, 'ext-')
-            || str_starts_with($packageName, 'lib-')
-            || \in_array($packageName, ['php', 'composer-plugin-api', 'composer-runtime-api', 'composer-installers'], true);
+        // Delegate to Composer's canonical, anchored platform-package check. A hand-rolled
+        // str_starts_with($name, 'php') would also match real vendor packages such as
+        // "phpunit/phpunit" or "phpstan/phpstan" and wrongly drop them from the mirror.
+        return PlatformRepository::isPlatformPackage($packageName);
     }
 
     /**
@@ -605,13 +606,8 @@ final class BuildRunner
      */
     private function generateProviderFiles(string $outputDir, array $grouped): void
     {
+        // No explicit mkdir: JsonFile::write() below creates the parent directory itself.
         $providerDir = $outputDir . '/p';
-
-        if (! is_dir($providerDir)) {
-            if (! mkdir($providerDir, 0755, true) && ! is_dir($providerDir)) {
-                throw new \RuntimeException(\sprintf('Failed to create provider directory: %s', $providerDir));
-            }
-        }
 
         foreach ($grouped as $packageName => $versions) {
             $minified = MetadataMinifier::minify($versions);

@@ -10,18 +10,33 @@ scratch status doc, not a spec.
 | Gate | State |
 |------|-------|
 | PHPStan (`make lint`, level max + bleedingEdge, PHP 8.5) | **0 errors** |
-| PHPUnit (`make test`) | **119 tests, 375 assertions — green** |
+| PHPUnit (`make test`) | **151 tests, 481 assertions — green** |
 | ECS (`make cs`) | **clean** |
-| Infection (`make infection`) | **Covered MSI 95%** (342/358 mutants killed); gate `minMsi 90 / minCoveredMsi 95` |
-| `make dogfood` (HTTP E2E) | **not run this session** (needs a free port / network) |
+| Infection (`make infection`) | **Covered MSI ~95.7%** (489/511 mutants killed), **mutation code coverage 100%**; gate `minMsi 90 / minCoveredMsi 95` — green |
+| `make dogfood` (HTTP E2E) | **not run this session**; see the note under "Open items" — the local build resolves very few packages from the `path` repos (pre-existing, not a regression) |
 
-Branch `master` has local commits **not yet pushed to `origin/master`** (the Infection work below,
-plus this note). Run `git push` when ready.
+Branch `master` is **in sync with `origin/master`**. The BuildRunner test work + bug fix below is
+**uncommitted in the working tree** — commit when ready.
 
 ## What changed recently (this session)
 
 Newest first:
 
+- **(uncommitted) BuildRunner unit tests + two fixes surfaced by mutation testing.** Added
+  `tests/Build/BuildRunnerTest.php` (32 tests) covering the previously-untested largest source file
+  via reflection — pure helpers (`isPlatformPackage`, `filterPackageNames`, `archive*`,
+  `versionMatchesConstraint`, `applyVersionPruning`), the filesystem generators (`computeSha256`,
+  `rmdir`, `generateIncludeFiles`/`ProviderFiles`/`PackagesJson`, `generateWebUi`) and
+  `serializePackages`/`packageToArray`. This pushed **whole-project mutation code coverage to 100%**.
+  Two changes fell out of it:
+  - **Real bug fixed:** `BuildRunner::isPlatformPackage()` used `str_starts_with($name, 'php')`, which
+    wrongly classified real vendor packages (`phpunit/phpunit`, `phpstan/phpstan`, `php-http/*`) as
+    platform packages and dropped them from the mirror. Now delegates to Composer's anchored
+    `PlatformRepository::isPlatformPackage()`. Side effect: `composer-installers` is now treated as a
+    normal package (correct).
+  - **Redundant code removed:** the explicit `mkdir` guard in `generateProviderFiles()` — `JsonFile::write()`
+    creates the parent dir itself, so the guard was dead. Removing it dropped 6 equivalent mutants and
+    kept the Infection gate at 95.
 - `555d0b9` — **Harden test suite via mutation testing (Covered MSI 65% → 95%).** Strengthened tests
   to kill Infection's escaped mutants across Auditor, ConfigLoader, the Audit/Build/Lock commands,
   and LockAnalyzer. Fixed a **real bug** a mutant surfaced: `LockCommand::applyToSatisJson()` did not
@@ -52,18 +67,28 @@ Dependency added earlier: `php-standard-library/php-standard-library` (PSL), use
   coverage run would stop at the first risky test and collect only **partial** coverage (this made
   well-tested code look uncovered and inflated "escaped"). Infection therefore uses a dedicated
   relaxed config; `make test` keeps the strict root config. Don't "simplify" this away.
-- **The 16 still-escaping mutants are documented equivalents**, not test gaps — e.g. PSL
-  `allow-unknown-fields` passthrough, php-parser treating a higher version as a syntax superset,
-  redundant guard conditions, `count()` over array keys (value-independent). Forcing tests for these
-  would be contrived.
+- **The ~22 still-escaping mutants are documented equivalents**, not test gaps — e.g. PSL
+  `Type\shape(..., true)` allow-unknown-fields passthrough, php-parser treating a higher version as a
+  syntax superset, redundant guard conditions, unreachable `mkdir(...) && is_dir(...)` failure guards
+  (the throw only fires when `mkdir` fails, which a normal test env can't force; the `0755` permission
+  bits are also behavior-neutral), and `count()` over array keys (value-independent). Forcing tests for
+  these would be contrived.
 
 ## Open items / next steps
 
-- **Push** the 2 local commits when ready (`git push`). Nothing has been pushed this session.
-- **Coverage breadth:** mutation testing only mutates *covered* code. Largely-uncovered files (e.g.
-  much of `src/Build/BuildRunner.php`) generate few/no mutants, so a high MSI does not mean high line
-  coverage. Writing tests for the uncovered logic is the next lever; raise `minMsi` as it improves.
-- **CI:** `make build` (`lint cs test dogfood`) does **not** include `make infection` (it is slow and
-  needs a coverage driver). Decide whether CI should enforce the MSI gate.
-- **dogfood E2E** was not run this session — run `make dogfood` (or full `make build`) in an
-  environment with a free port before relying on a green build.
+- **Commit** the uncommitted BuildRunner test work + the two `BuildRunner.php` fixes when ready.
+- **dogfood under-resolution (worth investigating):** running `bin/satiate build` against the dogfood
+  `satis.json` resolves **only 1–2 packages** (just `nikic/php-parser` + one more); `symfony/console`,
+  `phpunit/phpunit`, `phpstan/phpstan`, `php-http/discovery` are dropped. The `isPlatformPackage` fix
+  *improved* this (1 → 2 packages) and is not the cause. The remaining drop looks like a
+  version-constraint mismatch: the `path` repos report dev/non-semver versions that don't satisfy the
+  `^8.1` / `^13.2` / `^2.2` constraints in `versionMatchesConstraint()`. Since the dogfood script does
+  `composer install` of those packages under `set -e`, the full E2E likely **fails** today. Needs a
+  dedicated look (either fix the constraint handling for path/dev versions, or adjust the dogfood
+  fixture).
+- **Coverage breadth:** whole-project mutation code coverage is now **100%** — every mutable line in
+  `src` is exercised. Remaining lever is killing genuine equivalents only by simplifying code (as was
+  done for `generateProviderFiles`), not by adding tests.
+- **CI:** `make build` (`lint cs test dogfood`) and `.github/workflows/ci.yml` do **not** include
+  `make infection` (it is slow and needs a coverage driver). Decide whether CI should enforce the MSI
+  gate.
