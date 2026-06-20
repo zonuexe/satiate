@@ -34,12 +34,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # The project requires PHP >= 8.5. Add future stable versions here as they ship (e.g. '8.6').
         php: ['8.5']
-        # Forward-looking, non-blocking: surfaces breakage on the upcoming PHP before it ships.
-        include:
-          - php: nightly
-            experimental: true
-    continue-on-error: ${{ matrix.experimental || false }}
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/php-setup
@@ -55,8 +51,7 @@ jobs:
       - uses: ./.github/actions/php-setup
       - run: ./bin/dogfood-test
 
-  # Single required status check for branch protection: green only when every blocking job passed.
-  # The nightly PHP matrix entry is continue-on-error, so it does not affect this gate.
+  # Single required status check for branch protection: green only when every job above passed.
   ci-success:
     name: CI success
     runs-on: ubuntu-latest
