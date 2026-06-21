@@ -13,9 +13,11 @@ use Composer\Repository\ComposerRepository;
 use Composer\Repository\PlatformRepository;
 use Composer\Repository\RepositorySet;
 use Psl\Type;
-use Satiate\Audit\Auditor;
 use Satiate\Audit\AuditResult;
 use Satiate\Audit\AuditSummary;
+use Satiate\Audit\Parallel\AuditExecutor;
+use Satiate\Audit\Parallel\AuditTarget;
+use Satiate\Audit\Parallel\AuditTargetKind;
 use Satiate\Audit\Severity;
 use Satiate\Audit\VersionCapabilityDiff;
 use Satiate\Config\SatisConfig;
@@ -42,6 +44,7 @@ final class BuildRunner
         private readonly bool $includeDev,
         private readonly bool $runAudit,
         private readonly bool $useAuditCache,
+        private readonly int $jobs = 1,
     ) {
         $this->lastAuditSummary = new AuditSummary();
     }
@@ -109,12 +112,18 @@ final class BuildRunner
             $fingerprints = $this->loadFingerprints($fingerprintsPath);
         }
 
-        $auditor = new Auditor();
         $summary = new AuditSummary();
         $newlyAudited = [];
 
         /** @var array<string, list<string>> $newVersions */
         $newVersions = [];
+
+        // First pass: collect the versions that still need auditing (cache miss, archive present),
+        // keeping resolvedPackages order so the aggregation below is deterministic regardless of
+        // --jobs. Each archive is an independent CPU-bound parse — the part worth parallelising.
+        $distDir = $outputDir . '/' . $this->archiveDirName();
+        $pending = [];
+        $targets = [];
 
         foreach ($this->resolvedPackages as $package) {
             $packageName = $package->getPrettyName();
@@ -126,19 +135,31 @@ final class BuildRunner
                 continue;
             }
 
-            $distDir = $outputDir . '/' . $this->archiveDirName();
             $archivePath = $distDir . '/' . $this->archiveFileName($packageName, $version);
 
             if (! is_file($archivePath)) {
                 continue;
             }
 
-            $results = $auditor->auditArchive($packageName, $version, $archivePath);
-            $summary->addAll($results);
-            $fingerprints[$packageName][$version] = $this->capabilityFingerprint($results);
-            $newVersions[$packageName][] = $version;
+            $pending[] = [
+                'package' => $packageName,
+                'version' => $version,
+                'key' => $packageKey,
+                'path' => $archivePath,
+            ];
+            $targets[] = new AuditTarget($archivePath, AuditTargetKind::Archive, $packageName, $version);
+        }
 
-            $newlyAudited[] = $packageKey;
+        $resultsByPath = (new AuditExecutor($this->jobs))->run($targets);
+
+        // Second pass: aggregate findings, capability fingerprints, and cache bookkeeping in the
+        // original order. Only the parsing above ran in parallel; this stays sequential.
+        foreach ($pending as $item) {
+            $results = $resultsByPath[$item['path']];
+            $summary->addAll($results);
+            $fingerprints[$item['package']][$item['version']] = $this->capabilityFingerprint($results);
+            $newVersions[$item['package']][] = $item['version'];
+            $newlyAudited[] = $item['key'];
         }
 
         $this->lastCapabilityChanges = $this->detectCapabilityChanges($fingerprints, $newVersions);

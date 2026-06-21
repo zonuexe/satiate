@@ -5,10 +5,10 @@ declare(strict_types=1);
 namespace Satiate\Command;
 
 use Satiate\Audit\Auditor;
-use Satiate\Audit\AuditResult;
 use Satiate\Audit\AuditSummary;
+use Satiate\Audit\Parallel\AuditExecutor;
+use Satiate\Audit\Parallel\AuditTarget;
 use Satiate\Audit\Parallel\AuditTargetKind;
-use Satiate\Audit\Parallel\ParallelAuditRunner;
 use Satiate\Audit\Severity;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
@@ -106,7 +106,6 @@ final class AuditCommand extends Command
             }
         }
 
-        $auditor = new Auditor();
         $summary = new AuditSummary();
         $shownResults = 0;
         $files = $this->auditTargetsIn($path);
@@ -136,9 +135,15 @@ final class AuditCommand extends Command
 
         // The audit itself is the only parallel part: when --jobs > 1 each target is parsed in its
         // own worker process. Aggregation, output, and caching below stay sequential and ordered.
-        $resultsByFile = $jobs > 1
-            ? $this->auditInParallel($pending, $jobs)
-            : $this->auditSequentially($pending, $auditor);
+        // A built mirror stores package code as zip/tar archives under dist/, audited inside them; a
+        // plain source tree is audited file by file (composer.json included) — AuditTargetKind picks.
+        $targets = [];
+
+        foreach ($pending as $file) {
+            $targets[] = new AuditTarget($file, AuditTargetKind::forPath($file));
+        }
+
+        $resultsByFile = (new AuditExecutor($jobs))->run($targets);
 
         foreach ($pending as $file) {
             foreach ($resultsByFile[$file] as $result) {
@@ -217,42 +222,6 @@ final class AuditCommand extends Command
         }
 
         return self::SUCCESS;
-    }
-
-    /**
-     * @param list<string> $files
-     * @return array<string, list<AuditResult>>
-     */
-    private function auditSequentially(array $files, Auditor $auditor): array
-    {
-        $results = [];
-
-        foreach ($files as $file) {
-            // A built mirror stores package code as zip/tar archives under dist/, so audit inside
-            // them; a plain source tree is audited file by file (composer.json included).
-            $results[$file] = match (AuditTargetKind::forPath($file)) {
-                AuditTargetKind::Php => $auditor->auditFile('', '', $file),
-                AuditTargetKind::ComposerJson => $auditor->auditComposerJson('', '', $file),
-                AuditTargetKind::Archive => $auditor->auditArchive('', '', $file),
-            };
-        }
-
-        return $results;
-    }
-
-    /**
-     * @param list<string> $files
-     * @return array<string, list<AuditResult>>
-     */
-    private function auditInParallel(array $files, int $jobs): array
-    {
-        $targets = [];
-
-        foreach ($files as $file) {
-            $targets[$file] = AuditTargetKind::forPath($file);
-        }
-
-        return (new ParallelAuditRunner($jobs))->run($targets);
     }
 
     /**

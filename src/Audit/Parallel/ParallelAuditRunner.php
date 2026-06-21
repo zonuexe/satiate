@@ -26,8 +26,8 @@ final readonly class ParallelAuditRunner
     ) {}
 
     /**
-     * @param array<string, AuditTargetKind> $targets path => kind
-     * @return array<string, list<AuditResult>> findings keyed by the same path
+     * @param list<AuditTarget> $targets
+     * @return array<string, list<AuditResult>> findings keyed by each target's path
      */
     public function run(array $targets): array
     {
@@ -51,6 +51,10 @@ final readonly class ParallelAuditRunner
             }
         }
 
+        // Stop the workers gracefully now the results are in; otherwise the pool's destructor
+        // SIGKILLs them, which is noisy and leaves no chance to flush.
+        $pool->shutdown();
+
         return $merged;
     }
 
@@ -64,27 +68,29 @@ final readonly class ParallelAuditRunner
      * batches lets it pull a fresh one whenever a worker frees up — keeping every worker busy to the
      * end — while still collapsing hundreds of targets to a few dozen channel round-trips.
      *
-     * @param array<string, AuditTargetKind> $targets path => kind
-     * @return list<array<string, AuditTargetKind>>
+     * @param list<AuditTarget> $targets
+     * @return list<list<AuditTarget>>
      */
     private function balance(array $targets, int $workers): array
     {
         $oversubscribe = 3;
         $batchCount = max(1, min($workers * $oversubscribe, \count($targets)));
 
+        // Stat each target once up front; paths are unique, so a path-keyed map is enough.
         $sizes = [];
 
-        foreach (array_keys($targets) as $path) {
-            $size = filesize($path);
-            $sizes[$path] = $size === false ? 0 : $size;
+        foreach ($targets as $target) {
+            $size = filesize($target->path);
+            $sizes[$target->path] = $size === false ? 0 : $size;
         }
 
-        uksort($targets, static fn(string $a, string $b): int => $sizes[$b] <=> $sizes[$a]);
+        // Heaviest targets first (LPT): place the big archives before the long tail of small ones.
+        usort($targets, static fn(AuditTarget $a, AuditTarget $b): int => $sizes[$b->path] <=> $sizes[$a->path]);
 
         $batches = array_fill(0, $batchCount, []);
         $loads = array_fill(0, $batchCount, 0);
 
-        foreach ($targets as $path => $kind) {
+        foreach ($targets as $target) {
             $lightest = 0;
 
             foreach ($loads as $index => $load) {
@@ -93,8 +99,8 @@ final readonly class ParallelAuditRunner
                 }
             }
 
-            $batches[$lightest][$path] = $kind;
-            $loads[$lightest] += $sizes[$path];
+            $batches[$lightest][] = $target;
+            $loads[$lightest] += $sizes[$target->path];
         }
 
         return array_values(array_filter($batches, static fn(array $batch): bool => $batch !== []));

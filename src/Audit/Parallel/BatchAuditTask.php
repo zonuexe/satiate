@@ -22,7 +22,7 @@ use Satiate\Audit\AuditResult;
 final readonly class BatchAuditTask implements Task
 {
     /**
-     * @param array<string, AuditTargetKind> $targets path => kind
+     * @param list<AuditTarget> $targets
      */
     public function __construct(
         private array $targets,
@@ -36,12 +36,8 @@ final readonly class BatchAuditTask implements Task
         $auditor = new Auditor();
         $results = [];
 
-        foreach ($this->targets as $path => $kind) {
-            $results[$path] = match ($kind) {
-                AuditTargetKind::Php => $auditor->auditFile('', '', $path),
-                AuditTargetKind::ComposerJson => $auditor->auditComposerJson('', '', $path),
-                AuditTargetKind::Archive => $auditor->auditArchive('', '', $path),
-            };
+        foreach ($this->targets as $target) {
+            $results[$target->path] = $target->auditWith($auditor);
         }
 
         return $results;

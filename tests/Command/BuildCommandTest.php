@@ -54,6 +54,25 @@ final class BuildCommandTest extends TestCase
         self::assertTrue($definition->getOption('fail-on')->isValueRequired());
         // No default: without --fail-on the exit code never changes because of audit findings.
         self::assertNull($definition->getOption('fail-on')->getDefault());
+
+        self::assertTrue($definition->hasOption('jobs'));
+        self::assertSame('j', $definition->getOption('jobs')->getShortcut());
+        self::assertTrue($definition->getOption('jobs')->isValueRequired());
+        self::assertSame('1', $definition->getOption('jobs')->getDefault());
+    }
+
+    public function testInvalidJobsValueReturnsError(): void
+    {
+        $command = new BuildCommand();
+        $tester = new CommandTester($command);
+
+        $exitCode = $tester->execute([
+            '--config' => '/nonexistent/satis.json',
+            '--jobs' => 'nope',
+        ]);
+
+        self::assertSame(1, $exitCode);
+        self::assertStringContainsString('Invalid --jobs', $tester->getDisplay());
     }
 
     public function testExecuteWithNonExistentConfig(): void

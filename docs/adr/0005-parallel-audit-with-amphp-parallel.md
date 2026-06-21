@@ -64,28 +64,67 @@ benefits identically.
 
 ## Decision
 
-**Adopt option A, gated on measurement.** Build a prototype that parallelises the audit
-step with `amphp/parallel`, benchmark it against the sequential baseline on a real mirror,
-and keep it only if the wall-clock improvement justifies the dependency. Parallelising
-`downloadDistArchives()` is **deferred**: if download time proves significant, the
-preferred route is driving Composer's own `Loop`/`HttpDownloader` rather than adding an
-independent event loop.
+**Adopt option A — validated by measurement.** The prototype parallelises the audit with
+`amphp/parallel` and the benchmark confirmed a clear win (below), so the dependency is kept.
+Both `satiate audit` and `satiate build` gained an opt-in `--jobs=N`. Parallelising
+`downloadDistArchives()` is **deferred**: if download time proves significant, the preferred
+route is driving Composer's own `Loop`/`HttpDownloader` rather than adding an independent
+event loop.
 
 Stylistically, `amphp/amp` v3 (Fiber-based, written in a synchronous style on
 `revolt/event-loop`) fits this codebase's modern-PHP, strict-types posture better than
 ReactPHP's callback/Promise idiom — so if any event-loop code is later warranted, the amp
 stack is preferred over ReactPHP.
 
+### Default: `--jobs=1` (opt-in, like `make -j`)
+
+Parallelism is **off by default**. A build tool should be reproducible and well-behaved on
+shared CI, and `nproc`/`hw.ncpu` does not reflect cgroup CPU quotas — auto-detecting cores
+would happily spawn 12 workers inside a 1-CPU container and thrash. So `--jobs` defaults to
+`1` (byte-identical to the pre-parallel behaviour) and the user opts into `-j N`, exactly as
+`make` does. No `auto` keyword for the same reason: the safe core count is the caller's call,
+not a guess satiate makes.
+
+### Scheduling: size-balanced, oversubscribed batches
+
+The pool reuses a fixed set of workers, so one task per target adds a channel round-trip per
+target and stops scaling once workers are saturated. Instead targets are bundled into batches
+balanced by file size (longest-processing-time-first), with **~3× as many batches as workers**
+so the pool dynamically pulls a fresh batch whenever a worker frees up. One batch per worker
+was measurably worse at low `--jobs` (static imbalance); oversubscription fixed that while
+keeping the high-`--jobs` win.
+
+## Measured results
+
+Local mirror built from installed packages (211 dist archives), median of 3 runs, 12-core
+NTS host. Sequential baseline (`--jobs=1`): **25.2 s**, one core at ~99%.
+
+| `--jobs` | one task/target | size-balanced batches ×3 |
+|---|---|---|
+| 4  | 9.5 s | 8.6 s |
+| 8  | 8.8 s | **6.5 s** |
+| 12 | 8.8 s | 7.1 s |
+
+Best ≈ **3.8× (25.2 s → 6.5 s at `--jobs=8`)**. The batched schedule is ≥ the per-target one
+at every job count. Speedup plateaus around `--jobs=8`: a few dominant archives set an Amdahl
+floor and archive extraction contends on disk I/O, so 12 cores do not yield 12×. This is a
+property of the corpus, not the implementation — more workers past ~8 do not help.
+
 ## Consequences
 
-- A new dependency (`amphp/parallel`, pulling in `amphp/amp` and `revolt/event-loop`) is
-  introduced **only if the benchmark confirms a win**.
-- Audit parallelism is opt-in and bounded by `--jobs`; `--jobs=1` reproduces today's exact
-  sequential behaviour, and the cache/summary/output ordering stay deterministic because
-  only the parsing runs in parallel — all aggregation happens in the parent.
-- Worker startup and task/result serialisation add per-task overhead, so small mirrors may
-  be faster sequentially; the flag defaults conservatively and small jobs can stay serial.
-- PHPStan runs at `level: max`; amp's generic types must be annotated precisely rather than
-  suppressed, consistent with the project's no-baseline policy.
-- Download parallelism remains unaddressed for now; revisit via Composer's internal
-  downloader if measured build time warrants it.
+- A new production dependency: `amphp/parallel` (pulls in `amphp/amp` and `revolt/event-loop`).
+- Audit parallelism is opt-in and bounded by `--jobs`; `--jobs=1` reproduces the exact
+  sequential behaviour. Determinism holds because only parsing runs in parallel — findings come
+  back keyed by path and the parent aggregates, fingerprints, caches, and emits them in the
+  original order. Verified: `audit` output is byte-identical across job counts, and a `build`
+  with `--jobs 8` writes the same `capability-fingerprints.json` as `--jobs 1`.
+- The shared path runs through `Audit\Parallel`: `AuditTarget` (a path + how to audit it,
+  carrying package/version), `AuditExecutor` (picks sequential vs pool), `ParallelAuditRunner`
+  + `BatchAuditTask` (the pool and batching). `audit` and `build` both build `AuditTarget`s and
+  call `AuditExecutor`.
+- Worker startup and result serialisation add overhead, so very small mirrors can be faster at
+  `--jobs=1`; that is the default, so nobody pays for parallelism they did not ask for.
+- PHPStan runs at `level: max`; amp's generics are annotated precisely (the `Task` generic flows
+  through `Worker::submit`) — no casts, `@var`, or ignores.
+- Download parallelism remains unaddressed; revisit via Composer's internal downloader if
+  measured build time warrants it.
