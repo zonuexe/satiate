@@ -5,7 +5,11 @@ declare(strict_types=1);
 namespace Satiate\Command;
 
 use Satiate\Audit\Auditor;
+use Satiate\Audit\AuditResult;
 use Satiate\Audit\AuditSummary;
+use Satiate\Audit\Parallel\AuditTargetKind;
+use Satiate\Audit\Parallel\AuditTask;
+use Satiate\Audit\Parallel\ParallelAuditRunner;
 use Satiate\Audit\Severity;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
@@ -28,6 +32,7 @@ final class AuditCommand extends Command
         $this->addOption('cache-path', null, InputOption::VALUE_REQUIRED, 'Path to .satiate-cache for change-diff auditing');
         $this->addOption('min-severity', null, InputOption::VALUE_REQUIRED, 'Only list findings at or above this severity (info, warning, critical)', Severity::Info->value);
         $this->addOption('fail-on', null, InputOption::VALUE_REQUIRED, 'Exit non-zero if any finding is at or above this severity (info, warning, critical)');
+        $this->addOption('jobs', 'j', InputOption::VALUE_REQUIRED, 'Audit targets in parallel across N worker processes (1 = sequential)', '1');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
@@ -76,6 +81,18 @@ final class AuditCommand extends Command
             }
         }
 
+        $jobsInput = $input->getOption('jobs');
+        $jobs = \is_string($jobsInput) ? filter_var($jobsInput, FILTER_VALIDATE_INT) : false;
+
+        if ($jobs === false || $jobs < 1) {
+            $output->writeln(\sprintf(
+                '<error>Invalid --jobs "%s"; expected a positive integer.</error>',
+                \is_string($jobsInput) ? $jobsInput : '',
+            ));
+
+            return self::FAILURE;
+        }
+
         $auditedFiles = [];
 
         if (\is_string($cachePath) && $cachePath !== '' && is_file($cachePath . '/audited-files.json')) {
@@ -102,6 +119,11 @@ final class AuditCommand extends Command
             return self::SUCCESS;
         }
 
+        // Skip targets whose mtime matches the cache; keep the survivors in sorted order so output
+        // and cache writes stay deterministic regardless of how the audit below is scheduled.
+        $pending = [];
+        $mtimes = [];
+
         foreach ($files as $file) {
             $mtime = filemtime($file);
 
@@ -109,17 +131,18 @@ final class AuditCommand extends Command
                 continue;
             }
 
-            // A built mirror stores package code as zip/tar archives under dist/, so audit inside
-            // them; a plain source tree is audited file by file (composer.json included).
-            if (str_ends_with($file, '.php')) {
-                $results = $auditor->auditFile('', '', $file);
-            } elseif (basename($file) === 'composer.json') {
-                $results = $auditor->auditComposerJson('', '', $file);
-            } else {
-                $results = $auditor->auditArchive('', '', $file);
-            }
+            $pending[] = $file;
+            $mtimes[$file] = $mtime;
+        }
 
-            foreach ($results as $result) {
+        // The audit itself is the only parallel part: when --jobs > 1 each target is parsed in its
+        // own worker process. Aggregation, output, and caching below stay sequential and ordered.
+        $resultsByFile = $jobs > 1
+            ? $this->auditInParallel($pending, $jobs)
+            : $this->auditSequentially($pending, $auditor);
+
+        foreach ($pending as $file) {
+            foreach ($resultsByFile[$file] as $result) {
                 $summary->add($result);
 
                 // Every finding is counted for the summary, but only those at or above the
@@ -147,7 +170,7 @@ final class AuditCommand extends Command
                 $shownResults++;
             }
 
-            $newlyAudited[$file] = $mtime;
+            $newlyAudited[$file] = $mtimes[$file];
         }
 
         if (\is_string($cachePath) && $cachePath !== '' && $newlyAudited !== []) {
@@ -195,6 +218,42 @@ final class AuditCommand extends Command
         }
 
         return self::SUCCESS;
+    }
+
+    /**
+     * @param list<string> $files
+     * @return array<string, list<AuditResult>>
+     */
+    private function auditSequentially(array $files, Auditor $auditor): array
+    {
+        $results = [];
+
+        foreach ($files as $file) {
+            // A built mirror stores package code as zip/tar archives under dist/, so audit inside
+            // them; a plain source tree is audited file by file (composer.json included).
+            $results[$file] = match (AuditTargetKind::forPath($file)) {
+                AuditTargetKind::Php => $auditor->auditFile('', '', $file),
+                AuditTargetKind::ComposerJson => $auditor->auditComposerJson('', '', $file),
+                AuditTargetKind::Archive => $auditor->auditArchive('', '', $file),
+            };
+        }
+
+        return $results;
+    }
+
+    /**
+     * @param list<string> $files
+     * @return array<string, list<AuditResult>>
+     */
+    private function auditInParallel(array $files, int $jobs): array
+    {
+        $tasks = [];
+
+        foreach ($files as $file) {
+            $tasks[$file] = new AuditTask('', '', $file, AuditTargetKind::forPath($file));
+        }
+
+        return (new ParallelAuditRunner($jobs))->run($tasks);
     }
 
     /**
