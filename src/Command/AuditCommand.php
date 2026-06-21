@@ -8,7 +8,6 @@ use Satiate\Audit\Auditor;
 use Satiate\Audit\AuditResult;
 use Satiate\Audit\AuditSummary;
 use Satiate\Audit\Parallel\AuditTargetKind;
-use Satiate\Audit\Parallel\AuditTask;
 use Satiate\Audit\Parallel\ParallelAuditRunner;
 use Satiate\Audit\Severity;
 use Symfony\Component\Console\Command\Command;
@@ -247,13 +246,13 @@ final class AuditCommand extends Command
      */
     private function auditInParallel(array $files, int $jobs): array
     {
-        $tasks = [];
+        $targets = [];
 
         foreach ($files as $file) {
-            $tasks[$file] = new AuditTask('', '', $file, AuditTargetKind::forPath($file));
+            $targets[$file] = AuditTargetKind::forPath($file);
         }
 
-        return (new ParallelAuditRunner($jobs))->run($tasks);
+        return (new ParallelAuditRunner($jobs))->run($targets);
     }
 
     /**
