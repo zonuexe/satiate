@@ -1,6 +1,6 @@
 # Current work — snapshot
 
-_Last updated: 2026-06-20_
+_Last updated: 2026-06-21_
 
 A handoff note capturing the working state between sessions. Delete or rewrite freely; this is a
 scratch status doc, not a spec.
@@ -9,109 +9,79 @@ scratch status doc, not a spec.
 
 | Gate | State |
 |------|-------|
-| PHPStan (`make lint`, level max + bleedingEdge, PHP 8.5) | **0 errors** |
-| PHPUnit (`make test`) | **347 tests, 896 assertions — green** |
+| PHPStan (`make lint`, level max + bleedingEdge, PHP 8.5) | **0 errors** (src + tests) |
+| PHPUnit (`make test`) | **354 tests, 916 assertions — green** |
 | ECS (`make cs`) | **clean** |
-| Infection (`make infection`) | **green** — 934 mutants, **100% mutation code coverage**, **98% covered MSI** (gate 95), **98.5% MSI** (gate 90) |
-| `make dogfood` (HTTP E2E) | **green** — installs mirror-only with Packagist disabled, so a broken mirror fails it |
+| `make dogfood` (HTTP E2E) | **green** — SUCCESS on this branch |
+| Infection (`make infection`) | **NOT re-run** over the new `Audit/Parallel/*` code — see next steps |
 
-Work is on branch **`fix/mirror-correctness-and-audit`** as a single commit (not yet pushed) — the
-mirror-correctness + audit-overhaul described below. Push / open a PR when ready.
+Work is on branch **`experiment/parallel-audit`**, pushed, with **[PR #3](https://github.com/zonuexe/satiate/pull/3)** open against `master`
+(4 commits: ADR-0005 + 3 implementation). `master` locally has the ADR-add commit (`5ae7078`) that
+`origin/master` does not, so the PR bundles it — intentional, keeps the whole feature reviewable.
 
-## What changed recently (this session)
+## What this branch does — parallel audit (`--jobs`)
 
-Newest first:
+Parallelises the CPU-bound audit across worker processes, opt-in via `--jobs=N` on both
+`satiate audit` and `satiate build`. Rationale and the measurement gate are in
+**`docs/adr/0005-parallel-audit-with-amphp-parallel.md`** (read it first when resuming).
 
-- **(uncommitted) Mirror correctness + audit overhaul.** Made satiate actually work as a mirror and
-  the dogfood a genuine E2E, then extended the audit:
-  - **`versionMatchesConstraint()` keeps dev/branch versions.** `path`-repo packages report
-    `dev-master` (derived from the enclosing branch); a `^8.1`-style constraint can never match, so
-    they were dropped. This is the dogfood under-resolution noted below — now resolved.
-  - **`dist.shasum` is SHA-1, not SHA-256.** Composer verifies dist checksums with `hash_file('sha1', …)`,
-    so every download from a satiate mirror failed checksum verification. (`computeSha256` → `computeDistShasum`.)
-  - **Dogfood rewritten to install mirror-only** (Packagist disabled) so a broken mirror fails the
-    test instead of silently falling back to packagist.org; dropped the phantom `php-http/discovery`.
-  - **`audit` inspects distribution archives** (`zip`, `tar`, `tar.gz`, `tar.bz2`) via the new
-    `Auditor::auditArchive()`, shared with the build-time audit; added `Severity::rank()` and the
-    `AuditSummary` value object.
-  - **Severity controls:** `audit --min-severity`, a per-severity summary, `audit --fail-on` (CI
-    gate), `build --fail-on` (reflect audit in the build exit code) and `build --no-audit-cache`
-    (deterministic re-audit). README documents all commands/options; CHANGELOG `[Unreleased]` updated.
-  - **Supply-chain detections** (also slugified archive filenames + `archive.format` validation +
-    tar/tar.gz/tar.bz2 archive support along the way): decoder chains
-    (`eval(gzinflate(base64_decode()))`), request-input→sink backdoors, process exec, FFI/`dl`/`ini_set`
-    tampering, network egress + C2/exfil host literals + sensitive-path recon, stream-wrapper funcs,
-    PSR-1 mixed content, string-arg `assert`, **composer.json install hooks / plugin / autoload.files**,
-    and **cross-version "sudden capability change"** (`VersionCapabilityDiff`, advisory). Auditing is
-    robust against first-class-callable syntax (`foo(...)`). All detections tuned to **zero
-    false-positive criticals** on the clean dogfood mirror; every new line is 100% mutation-covered.
-- **(uncommitted) BuildRunner unit tests + two fixes surfaced by mutation testing.** Added
-  `tests/Build/BuildRunnerTest.php` (32 tests) covering the previously-untested largest source file
-  via reflection — pure helpers (`isPlatformPackage`, `filterPackageNames`, `archive*`,
-  `versionMatchesConstraint`, `applyVersionPruning`), the filesystem generators (`computeSha256`,
-  `rmdir`, `generateIncludeFiles`/`ProviderFiles`/`PackagesJson`, `generateWebUi`) and
-  `serializePackages`/`packageToArray`. This pushed **whole-project mutation code coverage to 100%**.
-  Two changes fell out of it:
-  - **Real bug fixed:** `BuildRunner::isPlatformPackage()` used `str_starts_with($name, 'php')`, which
-    wrongly classified real vendor packages (`phpunit/phpunit`, `phpstan/phpstan`, `php-http/*`) as
-    platform packages and dropped them from the mirror. Now delegates to Composer's anchored
-    `PlatformRepository::isPlatformPackage()`. Side effect: `composer-installers` is now treated as a
-    normal package (correct).
-  - **Redundant code removed:** the explicit `mkdir` guard in `generateProviderFiles()` — `JsonFile::write()`
-    creates the parent dir itself, so the guard was dead. Removing it dropped 6 equivalent mutants and
-    kept the Infection gate at 95.
-- `555d0b9` — **Harden test suite via mutation testing (Covered MSI 65% → 95%).** Strengthened tests
-  to kill Infection's escaped mutants across Auditor, ConfigLoader, the Audit/Build/Lock commands,
-  and LockAnalyzer. Fixed a **real bug** a mutant surfaced: `LockCommand::applyToSatisJson()` did not
-  `return` after a write failure, so `"Updated …"` printed even when the write failed. Raised the gate
-  to 90/95.
-- `8ba3c78` — **Introduce Infection.** Added `.vendor-bin/infection` (bamarni bin layout),
-  `bin/infection`, `infection.json5`, a `make infection` target, and command-definition tests
-  (killed the 13 `configure()` mutants). Set the initial gate to 65/65.
-- `3fd8809` — Documented the PHPStan house rules in `AGENTS.md` (fix at the root with PSL/`assert()`,
-  never `@phpstan-ignore` / baseline / casts / local-var `@var` / level changes).
-- `8b7522c` — Eliminated all PHPStan level-max errors via PSL validation (`Psl\Json\typed` +
-  `Psl\Type` shapes, `assert()`, `instanceof` narrowing). Also fixed a latent bug:
-  `BuildRunner::collectAllPackageNames()` called `getPackageNames()` on `RepositoryInterface`
-  (only `ComposerRepository` has it) → now guarded with `instanceof`.
+- **Why a worker pool, not an event loop.** The audit (AST-parsing every PHP file in every mirrored
+  archive) is pure CPU and saturates one core (~25s, 99%). An event loop (ReactPHP / amphp+revolt)
+  only overlaps I/O and does nothing here; parallelism across cores needs OS processes. PHP CLI is
+  **NTS**, so `amphp/parallel` spawns process workers (no ZTS needed).
+- **New dependency:** `amphp/parallel ^2` (pulls in `amphp/amp` v3 + `revolt/event-loop`).
+- **Shared path** under `src/Audit/Parallel/`:
+  - `AuditTarget` — a path + how to audit it (`AuditTargetKind`: php / composer-json / archive),
+    carrying package/version so `build` can key capability fingerprints.
+  - `AuditExecutor` — the single entry both commands use; `--jobs 1` runs inline, more uses the pool.
+  - `ParallelAuditRunner` + `BatchAuditTask` — the pool and its scheduling; graceful `shutdown()`.
+- **Determinism preserved:** only parsing runs in parallel. Findings come back keyed by path; the
+  parent aggregates summary / fingerprints / cache / output in the original order.
 
-Dependency added earlier: `php-standard-library/php-standard-library` (PSL), used to validate decoded
-`satis.json` / `composer.lock` at the boundary.
+### Two design decisions worth remembering
 
-## Infection / coverage notes (important for resuming)
+- **Default `--jobs=1` (opt-in, like `make -j`).** No `auto`: `nproc`/`hw.ncpu` ignores cgroup CPU
+  quotas, so an auto default would oversubscribe inside containers. Caller picks the count.
+- **Size-balanced, oversubscribed batches.** Pool reuses a fixed worker set, so one task per target
+  adds a channel round-trip each and stops scaling once workers saturate. Targets are bundled into
+  batches balanced by file size (LPT), with **~3× as many batches as workers** so the pool keeps
+  every worker busy. One batch per worker was measurably worse at low `--jobs` (see ADR table).
 
-- **Coverage driver:** Infection needs PCOV or Xdebug. **PCOV 1.0.12 is installed in the local
-  Homebrew PHP's `php.ini`** — this is a machine-level change, *not* in the repo. Anyone else (or CI)
-  running `make infection` must install a coverage driver too. (phpdbg does NOT work: php-code-coverage
-  dropped the phpdbg driver; PHPUnit 13 only ships PCOV/Xdebug drivers.)
-- **Why `tools/infection/phpunit.xml.dist` exists:** the root `phpunit.xml.dist` is intentionally
-  strict (`requireCoverageMetadata` / `beStrictAboutCoverageMetadata` / `failOnRisky`). Under coverage
-  that marks many tests "risky", and Infection adds `stopOnDefect` to its generated config — so the
-  coverage run would stop at the first risky test and collect only **partial** coverage (this made
-  well-tested code look uncovered and inflated "escaped"). Infection therefore uses a dedicated
-  relaxed config; `make test` keeps the strict root config. Don't "simplify" this away.
-- **The ~22 still-escaping mutants are documented equivalents**, not test gaps — e.g. PSL
-  `Type\shape(..., true)` allow-unknown-fields passthrough, php-parser treating a higher version as a
-  syntax superset, redundant guard conditions, unreachable `mkdir(...) && is_dir(...)` failure guards
-  (the throw only fires when `mkdir` fails, which a normal test env can't force; the `0755` permission
-  bits are also behavior-neutral), and `count()` over array keys (value-independent). Forcing tests for
-  these would be contrived.
+### Measured (211-archive local mirror, median of 3, 12-core NTS host)
+
+Sequential `--jobs=1` = 25.2s. Best ≈ **3.8× (→ 6.5s at `--jobs=8`)**. Plateaus ~`--jobs=8`: a few
+dominant archives set an Amdahl floor + extraction I/O contends — a corpus property, not the impl.
+
+### Verified
+
+- `audit` output **byte-identical** across job counts (parity unit test + full-mirror diff).
+- `build --jobs 8` writes the **same `capability-fingerprints.json`** + same 2716-finding summary as
+  `--jobs 1`.
 
 ## Open items / next steps
 
-- **Commit** the uncommitted work (mirror/audit overhaul above + the earlier BuildRunner test work
-  and `BuildRunner.php` fixes) when ready.
-- **dogfood under-resolution — RESOLVED.** The `path` repos reported dev versions (`dev-master`) that
-  `versionMatchesConstraint()` rejected against the `^8.1`/`^13.2`/`^2.2` constraints, so packages were
-  dropped; a separate SHA-256-vs-SHA-1 `dist.shasum` bug meant even included packages failed checksum
-  verification on download. Both fixed; the dogfood now installs mirror-only with Packagist disabled
-  and is green. (Note: `symfony/console`/`phpunit` cannot resolve mirror-only because their transitive
-  caret-constrained deps are also `dev-master` — an inherent limit of dogfooding over an installed
-  vendor tree — so they are asserted present in the mirror rather than installed from it.)
-- **Re-run `make infection`** over the new audit/build code before relying on the MSI gate.
-- **Coverage breadth:** whole-project mutation code coverage is now **100%** — every mutable line in
-  `src` is exercised. Remaining lever is killing genuine equivalents only by simplifying code (as was
-  done for `generateProviderFiles`), not by adding tests.
-- **CI:** `make build` (`lint cs test dogfood`) and `.github/workflows/ci.yml` do **not** include
-  `make infection` (it is slow and needs a coverage driver). Decide whether CI should enforce the MSI
-  gate.
+- **Watch CI on [PR #3](https://github.com/zonuexe/satiate/pull/3).** Main risk is the PHP matrix: confirm `amphp/parallel ^2` and its deps
+  install/resolve on every matrix PHP. (`composer.lock` updated; most of the PR's +1850 is the lock.)
+- **Re-run `make infection`** over `src/Audit/Parallel/*` + the changed `AuditCommand` / `BuildCommand`
+  / `BuildRunner` before trusting the MSI gate — the prior Infection run predates this code, so its
+  numbers are stale. (Coverage driver caveats below still apply.)
+- **`--jobs` default / `auto`:** revisit only if real usage wants core-count-by-default; current
+  decision is deliberate opt-in (ADR-0005).
+- **Download parallelism deferred:** if build download time matters, drive Composer's own
+  `Loop`/`HttpDownloader` rather than adding a second event loop. Not started.
+- **Before merge (optional):** decide whether to squash the 3 `experiment:` commits into one `feat:`
+  and/or rename the branch. PR currently keeps them separate.
+
+## Infection / coverage notes (important for resuming)
+
+- **Coverage driver:** Infection needs PCOV or Xdebug. **PCOV is installed in the local Homebrew
+  PHP's `php.ini`** — a machine-level change, *not* in the repo. CI / anyone else running
+  `make infection` must install a coverage driver too. (phpdbg does NOT work with PHPUnit 13.)
+- **Why `tools/infection/phpunit.xml.dist` exists:** the root `phpunit.xml.dist` is intentionally
+  strict (`requireCoverageMetadata` / `failOnRisky`). Under coverage that marks many tests "risky" and
+  Infection's `stopOnDefect` would stop at the first one and collect only partial coverage. Infection
+  uses a dedicated relaxed config; `make test` keeps the strict root config. Don't "simplify" away.
+- **Parallel code + mutation testing:** `BatchAuditTask::run()` executes only inside a worker process,
+  so a coverage driver in the parent won't see it — expect Infection to report it uncovered. The same
+  logic is exercised through `AuditExecutor`'s sequential path (`AuditTarget::auditWith`), which the
+  parity tests cover; keep that in mind rather than contorting tests to cover the worker entrypoint.

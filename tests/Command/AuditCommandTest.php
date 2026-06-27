@@ -989,6 +989,70 @@ final class AuditCommandTest extends TestCase
         self::assertStringNotContainsString('issue(s) found', $display);
     }
 
+    public function testJobsOptionIsRegistered(): void
+    {
+        $command = new AuditCommand();
+        $definition = $command->getDefinition();
+
+        self::assertTrue($definition->hasOption('jobs'));
+        self::assertSame('j', $definition->getOption('jobs')->getShortcut());
+        self::assertTrue($definition->getOption('jobs')->isValueRequired());
+        self::assertSame('1', $definition->getOption('jobs')->getDefault());
+    }
+
+    public function testInvalidJobsValueShowsError(): void
+    {
+        $tmpDir = sys_get_temp_dir() . '/audit_test_' . bin2hex(random_bytes(4));
+        mkdir($tmpDir);
+        file_put_contents($tmpDir . '/eval.php', '<?php eval($x);');
+
+        $command = new AuditCommand();
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            '--path' => $tmpDir,
+            '--jobs' => '0',
+        ]);
+
+        $display = $tester->getDisplay();
+        $this->cleanupDir($tmpDir);
+
+        self::assertSame(1, $exitCode);
+        self::assertStringContainsString('Invalid --jobs', $display);
+    }
+
+    /**
+     * The worker pool only parallelises parsing; aggregation and ordered output stay in the parent,
+     * so `--jobs N` must produce byte-identical output to the sequential path (see ADR-0005).
+     */
+    public function testParallelJobsProduceIdenticalOutputToSequential(): void
+    {
+        $tmpDir = sys_get_temp_dir() . '/audit_test_' . bin2hex(random_bytes(4));
+        mkdir($tmpDir);
+        file_put_contents($tmpDir . '/aaa.php', '<?php eval($x);');
+        file_put_contents($tmpDir . '/bbb.php', '<?php exec($cmd);');
+        file_put_contents($tmpDir . '/ccc.php', '<?php assert($x === 1);');
+        file_put_contents($tmpDir . '/ddd.php', '<?php echo "clean";');
+
+        $sequential = new CommandTester(new AuditCommand());
+        $sequential->execute([
+            '--path' => $tmpDir,
+            '--jobs' => '1',
+        ]);
+        $sequentialDisplay = $sequential->getDisplay();
+
+        $parallel = new CommandTester(new AuditCommand());
+        $parallel->execute([
+            '--path' => $tmpDir,
+            '--jobs' => '4',
+        ]);
+        $parallelDisplay = $parallel->getDisplay();
+
+        $this->cleanupDir($tmpDir);
+
+        self::assertSame($sequential->getStatusCode(), $parallel->getStatusCode());
+        self::assertSame($sequentialDisplay, $parallelDisplay);
+    }
+
     private function cleanupDir(string $path): void
     {
         $files = new \RecursiveIteratorIterator(

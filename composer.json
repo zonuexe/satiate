@@ -4,6 +4,7 @@
     "bin": ["bin/satiate"],
     "require": {
         "php": ">=8.5",
+        "amphp/parallel": "^2",
         "composer/composer": "^2.10",
         "nikic/php-parser": "^5.7",
         "php-standard-library/php-standard-library": "^6.2",

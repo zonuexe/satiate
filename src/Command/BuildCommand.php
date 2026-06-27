@@ -29,6 +29,7 @@ final class BuildCommand extends Command
         $this->addOption('no-audit-cache', null, InputOption::VALUE_NONE, 'Audit every package every run instead of skipping versions recorded in .satiate-cache');
         $this->addOption('include-dev', null, InputOption::VALUE_NONE, 'Include dev dependencies');
         $this->addOption('fail-on', null, InputOption::VALUE_REQUIRED, 'Exit non-zero if the audit finds an issue at or above this severity (info, warning, critical)');
+        $this->addOption('jobs', 'j', InputOption::VALUE_REQUIRED, 'Audit packages in parallel across N worker processes (1 = sequential)', '1');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
@@ -44,6 +45,18 @@ final class BuildCommand extends Command
 
         if (! \is_string($outputDir)) {
             $output->writeln('<error>Invalid output directory.</error>');
+
+            return self::FAILURE;
+        }
+
+        $jobsInput = $input->getOption('jobs');
+        $jobs = \is_string($jobsInput) ? filter_var($jobsInput, FILTER_VALIDATE_INT) : false;
+
+        if ($jobs === false || $jobs < 1) {
+            $output->writeln(\sprintf(
+                '<error>Invalid --jobs "%s"; expected a positive integer.</error>',
+                \is_string($jobsInput) ? $jobsInput : '',
+            ));
 
             return self::FAILURE;
         }
@@ -89,6 +102,7 @@ final class BuildCommand extends Command
             includeDev: $includeDev,
             runAudit: $runAudit,
             useAuditCache: $useAuditCache,
+            jobs: $jobs,
         );
 
         try {
